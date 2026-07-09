@@ -130,7 +130,7 @@ lib/
   download-registry.js  short-lived in-memory registry backing video downloads
   auth.js               optional Microsoft SSO (env-gated, see Configuration below)
 public/              vanilla single-page app (index.html, app.js, style.css, vendor/fflate)
-.claude/skills/run-image-resizer/   test driver and sample fixtures
+test/                test driver (driver.mjs) and sample fixtures (samples/)
 ```
 
 ## Running tests
@@ -138,8 +138,8 @@ public/              vanilla single-page app (index.html, app.js, style.css, ven
 The project has no unit-test framework; instead there's a driver script that exercises the real compression pipeline against sample files and asserts the results actually hit their targets.
 
 ```bash
-node .claude/skills/run-image-resizer/driver.mjs          # fast: runs samples through the compressor directly, no browser
-node .claude/skills/run-image-resizer/driver.mjs --e2e    # slower: launches the server, drives the real UI in a browser, saves a screenshot
+node test/driver.mjs          # fast: runs samples through the compressor directly, no browser
+node test/driver.mjs --e2e    # slower: launches the server, drives the real UI in a browser, saves a screenshot
 ```
 
 The `--e2e` variant needs Playwright's Chromium build installed once:
@@ -147,6 +147,19 @@ The `--e2e` variant needs Playwright's Chromium build installed once:
 ```bash
 npx playwright install chromium
 ```
+
+`--e2e` runs the server on port 3299 specifically so it never collides with a `npm start` instance on the default 3210.
+
+## Development notes
+
+A few non-obvious things worth knowing before touching the code:
+
+- **HEIC needs a pre-step.** sharp's prebuilt binaries generally ship without libheif, so HEIC/HEIF input is detected by its `ftyp` brand in `lib/decode.js` and transcoded via `heic-convert` before it ever reaches sharp.
+- **PNG is lossless** - there's no quality knob the way JPEG/WebP have one. `compress()` uses palette quantization as the searchable size knob instead. Encoding a photographic/noisy image to PNG at high effort is slow (each search step is a full re-quantization); real graphics/screenshots are fast. Prefer JPEG/WebP for photos.
+- **JPEG almost always fits the target**, even at large dimensions, because the lowest quality setting compresses very aggressively. Size/resolution conflicts mostly show up with PNG output or a large minimum-resolution floor.
+- **The CSP intentionally allows `data:`/`blob:` for images and media.** Compressed results and previews are delivered as data URLs and object URLs; tightening `imgSrc`/`mediaSrc` in `server.js` will break previews.
+- **Don't add the `canvas` npm package to this process.** sharp and canvas loaded in the same Node process are known to crash on Windows.
+- **`multer` must stay on the 2.x line** - 1.x has known vulnerabilities.
 
 ## License
 

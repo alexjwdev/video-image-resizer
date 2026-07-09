@@ -87,7 +87,7 @@ A Pull Request (PR) asks the project maintainer to review your branch and merge 
 2. If you don't see the banner, go to the **Pull requests** tab and click **New pull request**, then choose your branch.
 3. In the PR description, write:
    - What you changed and why.
-   - How you tested it (for this project, that usually means running `node .claude/skills/run-image-resizer/driver.mjs`, see the README).
+   - How you tested it (for this project, that usually means running `node test/driver.mjs`, see the README).
    - Anything you're unsure about or want feedback on.
 4. Submit the PR.
 

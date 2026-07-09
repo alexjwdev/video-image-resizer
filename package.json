@@ -7,7 +7,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "smoke": "node .claude/skills/run-image-resizer/driver.mjs"
+    "test": "node test/driver.mjs",
+    "smoke": "node test/driver.mjs"
   },
   "engines": {
     "node": ">=20.9.0"

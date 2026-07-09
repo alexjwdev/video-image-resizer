@@ -2,8 +2,8 @@
 /**
  * Driver / harness for the image-resizer app.
  *
- *   node .claude/skills/run-image-resizer/driver.mjs           # lib smoke (default)
- *   node .claude/skills/run-image-resizer/driver.mjs --e2e     # browser + screenshot
+ *   node test/driver.mjs           # lib smoke (default)
+ *   node test/driver.mjs --e2e     # browser + screenshot
  *
  * Smoke mode (primary): imports lib/compress.js directly and runs every sample
  * through it for several formats, ASSERTING the output is <=500KB (or that a
@@ -16,9 +16,9 @@
  * uploads a sample through the actual UI, asserts a result rendered <=500KB,
  * and writes a screenshot to result.png next to this driver. Needs:
  *   npm install -D playwright && npx playwright install chromium
- * NOTE: image-only for now; its `.stats` selector also predates the current
- * DOM (`.card-sizes` is the real class) — pre-existing drift, not video
- * related. Fix that selector before adding a video-upload e2e assertion.
+ * NOTE: image-only for now - a video-upload e2e assertion would need its
+ * own wait condition (video results render via <video>/download link, not
+ * a data-URL <img>).
  */
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -28,7 +28,7 @@ import { spawn } from 'node:child_process';
 
 const require = createRequire(import.meta.url);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.resolve(__dirname, '..', '..', '..'); // skill dir -> project root
+const ROOT = path.resolve(__dirname, '..'); // test/ -> project root
 const SAMPLES = path.join(__dirname, 'samples');
 const TARGET = 500 * 1024;
 
@@ -156,14 +156,15 @@ async function e2e() {
     await page.click('#compressBtn');
 
     await page.waitForFunction(() => {
-      const s = document.querySelector('#results .card .stats');
-      return s && s.textContent.includes('Result');
+      const s = document.querySelector('#results .card .card-sizes-text');
+      return s && s.textContent.includes('→');
     }, { timeout: 30000 });
 
     const info = await page.evaluate(() => {
       const card = document.querySelector('#results .card');
-      const txt = card.querySelector('.stats').textContent;
-      const m = txt.match(/Result:[^·]*·\s*([\d.]+)\s*KB/);
+      const txt = card.querySelector('.card-sizes-text').textContent;
+      // e.g. "1235 KB → 494 KB" - the size after the arrow is the result.
+      const m = txt.match(/→\s*([\d.]+)\s*KB/);
       return { stats: txt, resultKB: m ? parseFloat(m[1]) : null, badge: card.querySelector('.badge')?.textContent };
     });
 

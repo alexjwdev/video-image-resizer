@@ -3,11 +3,13 @@ node_modules/
 *.log
 .DS_Store
 Thumbs.db
-# Claude Code local/session artifacts - per-machine, not shared
-.claude/settings.local.json
-.claude/scheduled_tasks.lock
-# driver/test screenshots
-.claude/skills/run-image-resizer/*.png
-!public/**/*.png
-# generated synthetic test clip (not real content, regenerated on demand)
-.claude/skills/run-image-resizer/samples/testclip.mp4
+
+# Local working notes and AI-agent tooling scaffolding - useful locally,
+# not part of the published project.
+project.md
+.claude/
+
+# generated test screenshot / synthetic clip (not real content, regenerated
+# on demand by test/driver.mjs)
+test/result.png
+test/samples/testclip.mp4
