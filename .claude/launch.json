@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "image-resizer",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["server.js"],
+      "port": 3210,
+      "autoPort": true
+    }
+  ]
+}

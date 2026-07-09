@@ -1,0 +1,32 @@
+{
+  "name": "image-resizer",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Upload any common image or video format and auto-compress it to a target size. isBanner + minimum-resolution controls for images; best-effort target-size video conversion to MP4. Optional Microsoft SSO and env-configurable branding.",
+  "type": "commonjs",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "smoke": "node .claude/skills/run-image-resizer/driver.mjs"
+  },
+  "engines": {
+    "node": ">=20.9.0"
+  },
+  "dependencies": {
+    "@azure/msal-node": "^5.4.0",
+    "@ffmpeg-installer/ffmpeg": "^1.1.0",
+    "@ffprobe-installer/ffprobe": "^2.1.2",
+    "compression": "^1.8.1",
+    "express": "^4.21.2",
+    "express-rate-limit": "^8.5.2",
+    "express-session": "^1.19.0",
+    "fflate": "^0.8.3",
+    "heic-convert": "^2.1.0",
+    "helmet": "^8.0.0",
+    "multer": "^2.2.0",
+    "sharp": "^0.34.0"
+  },
+  "devDependencies": {
+    "playwright": "^1.61.0"
+  }
+}

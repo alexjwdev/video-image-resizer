@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Image Resizer</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="topbar-row">
+        <div>
+          <h1 id="brandName">Image Resizer</h1>
+          <p id="brandTagline" class="tagline">Compress images and videos to your size target - banner-safe, resolution-aware</p>
+        </div>
+        <div id="authStatus" class="auth-status" hidden>
+          <span id="authUser"></span>
+          <a href="/auth/logout">Sign out</a>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap">
+
+    <!-- Drop zone -->
+    <section id="dropzone" class="dropzone" tabindex="0" aria-label="Upload images">
+      <div class="dz-inner">
+        <svg class="dz-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/>
+        </svg>
+        <strong>Drop images or videos here</strong>
+        <span>or <button type="button" id="browseBtn" class="link">browse files</button></span>
+        <small id="formatsHint">JPG · PNG · WebP · GIF · AVIF · BMP · HEIC · MP4 · MOV · WebM · AVI</small>
+      </div>
+      <input type="file" id="fileInput"
+        accept="image/*,.heic,.heif,video/mp4,video/quicktime,video/webm,video/x-msvideo,.mov,.avi"
+        multiple hidden />
+    </section>
+
+    <!-- Pre-compress queue list -->
+    <div id="queueList" class="queue-list" hidden></div>
+
+    <!-- Options (collapsible) -->
+    <details id="optionsPanel" class="options-panel" open>
+      <summary class="options-summary">
+        <span>Options</span>
+        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M19 9l-7 7-7-7"/>
+        </svg>
+      </summary>
+      <div class="options">
+        <div class="opt">
+          <label class="opt-label" for="batchLimit">Max files per batch</label>
+          <select id="batchLimit"></select>
+          <small class="opt-help">Larger batches use more RAM and take longer.</small>
+        </div>
+
+        <div id="imageSettings" class="opt-group">
+          <h3 class="opt-group-title">Image settings</h3>
+          <div class="opt">
+            <span class="opt-label">Output format</span>
+            <div class="radios">
+              <label><input type="radio" name="format" value="jpeg" checked /> JPEG</label>
+              <label><input type="radio" name="format" value="webp" /> WebP</label>
+              <label><input type="radio" name="format" value="png" /> PNG</label>
+            </div>
+          </div>
+          <div class="opt">
+            <label class="opt-label" for="targetKB">Target size (KB)</label>
+            <input type="number" id="targetKB" min="10" step="10" value="500" />
+          </div>
+          <div class="opt">
+            <label class="opt-label checkbox">
+              <input type="checkbox" id="isBanner" /> Banner mode
+            </label>
+            <small class="opt-help">Protects full width - compresses quality before shrinking dimensions.</small>
+          </div>
+          <div class="opt">
+            <span class="opt-label">Minimum resolution (px)</span>
+            <div class="minres">
+              <input type="number" id="minWidth" min="0" placeholder="width" />
+              <span>×</span>
+              <input type="number" id="minHeight" min="0" placeholder="height" />
+            </div>
+            <small class="opt-help">Won't go below this. Conflicts let you choose.</small>
+          </div>
+        </div>
+
+        <div id="videoSettings" class="opt-group">
+          <h3 class="opt-group-title">Video settings</h3>
+          <div class="opt">
+            <label class="opt-label" for="videoTargetMB">Target size (MB)</label>
+            <input type="number" id="videoTargetMB" min="1" step="1" value="50" />
+            <small class="opt-help">Always converts to MP4. Best-effort - may land within ~5% of target, and takes noticeably longer than images.</small>
+          </div>
+        </div>
+      </div>
+    </details>
+
+    <!-- Action bar -->
+    <div class="actionbar">
+      <span id="queueCount" class="queue-count"></span>
+      <div class="actions">
+        <button type="button" id="clearBtn" class="btn ghost" disabled>Clear all</button>
+        <button type="button" id="compressBtn" class="btn primary" disabled>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon"><path d="M9 3H5a2 2 0 00-2 2v4m6-6h10a2 2 0 012 2v4M9 3v18m0 0h10a2 2 0 002-2V9M9 21H5a2 2 0 01-2-2V9m0 0h18"/></svg>
+          Compress
+        </button>
+        <button type="button" id="zipBtn" class="btn" hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon"><path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+          Download all (ZIP)
+        </button>
+      </div>
+    </div>
+
+    <!-- Progress bar -->
+    <div id="progressWrap" class="progress-wrap" hidden>
+      <div class="progress-track"><div id="progressFill" class="progress-fill"></div></div>
+      <div class="progress-label">
+        <span id="progressText">Preparing…</span>
+        <span id="progressCount"></span>
+      </div>
+    </div>
+
+    <div id="error" class="error" hidden></div>
+
+    <!-- Results header -->
+    <div id="resultsHeader" class="results-header" hidden>
+      <span id="resultsTitle">Results</span>
+      <span id="resultsSummary" class="results-summary"></span>
+    </div>
+
+    <!-- Results grid -->
+    <div id="results" class="results-grid"></div>
+
+  </main>
+
+  <!-- Grid card template -->
+  <template id="cardTpl">
+    <article class="card">
+      <div class="card-thumb-wrap">
+        <img class="card-thumb" alt="" />
+        <video class="card-video" controls muted playsinline preload="none" hidden></video>
+        <span class="badge"></span>
+      </div>
+      <div class="card-body">
+        <p class="fname"></p>
+        <p class="card-sizes">
+          <span class="card-sizes-text"></span>
+          <span class="card-format"></span>
+        </p>
+      </div>
+    </article>
+  </template>
+
+  <!-- Compare overlay -->
+  <div id="overlay" class="overlay" hidden role="dialog" aria-modal="true">
+    <div class="overlay-bg"></div>
+    <div class="overlay-panel">
+      <header class="overlay-head">
+        <span class="overlay-fname"></span>
+        <button id="overlayClose" class="overlay-close" type="button" aria-label="Close">✕</button>
+      </header>
+      <div class="overlay-compare">
+        <div class="compare-stage">
+          <img class="img-before" alt="original" />
+          <img class="img-after"  alt="compressed" />
+          <div class="divider-handle">
+            <div class="divider-line"></div>
+            <div class="divider-pill">◀▶</div>
+          </div>
+        </div>
+        <input type="range" class="slider" min="0" max="100" value="50" aria-label="Drag to compare" />
+        <div class="compare-labels"><span>Before</span><span>After</span></div>
+      </div>
+      <video class="overlay-video" controls hidden></video>
+      <div class="overlay-stats"></div>
+      <div class="overlay-conflict" hidden></div>
+      <div class="overlay-actions"></div>
+    </div>
+  </div>
+
+  <script src="vendor/fflate.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+node_modules/
+.env
+*.log
+.DS_Store
+Thumbs.db
+# Claude Code local/session artifacts - per-machine, not shared
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+# driver/test screenshots
+.claude/skills/run-image-resizer/*.png
+!public/**/*.png
+# generated synthetic test clip (not real content, regenerated on demand)
+.claude/skills/run-image-resizer/samples/testclip.mp4
