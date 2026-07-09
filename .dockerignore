@@ -1,0 +1,13 @@
+node_modules
+.git
+.env
+.vscode
+test
+project.md
+CONTRIBUTING.md
+*.log
+.DS_Store
+Thumbs.db
+Start Image Resizer.cmd
+Start Image Resizer.vbs
+launch.ps1

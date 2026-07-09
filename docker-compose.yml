@@ -1,0 +1,15 @@
+services:
+  image-resizer:
+    build: .
+    ports:
+      - "3210:3210"
+    env_file:
+      - .env
+    restart: unless-stopped
+    # Video encoding is CPU-heavy (libx264 threads across cores). Uncomment
+    # and adjust if this needs to share a host with other services.
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: "2"
+    #       memory: 2g

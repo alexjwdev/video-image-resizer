@@ -57,6 +57,28 @@ That's it - with no `.env` file at all, the app runs with no login and default b
 
 Copy `.env.example` to `.env` if you want to change the port, upload limits, or the two optional features described below.
 
+### Or run it with Docker
+
+No Node.js install needed - the image bundles everything, including sharp/libvips and ffmpeg.
+
+```bash
+cp .env.example .env    # optional - only needed to change defaults or enable SSO/branding
+docker compose up --build
+```
+
+Or without Compose:
+
+```bash
+docker build -t image-resizer .
+docker run -p 3210:3210 --env-file .env image-resizer
+```
+
+Then open `http://localhost:3210`. The container is stateless (everything lives in memory or a
+short-lived temp directory for the duration of a request), so it can be killed and restarted
+freely with no volume to manage.
+Video encoding is CPU-heavy - if this shares a host with other services, set resource limits
+(see the commented-out `deploy.resources` block in `docker-compose.yml`, or `docker run --cpus`/`--memory`).
+
 ## Configuration
 
 All configuration is via environment variables, loaded from a `.env` file in the project root if one exists.
