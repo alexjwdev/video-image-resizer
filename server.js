@@ -246,8 +246,51 @@ function buildVideoResult(f, r, opts) {
   };
 }
 
+const clamp01 = (v) => Math.max(0, Math.min(1, v));
+
+// SEC: validate the optional pre-compression edit from the request body into a
+// clean shape (or null). Shape/type only here - crop-rectangle BOUNDS are
+// clamped in lib/compress.js where the real (post-rotate) dimensions are known,
+// so client-supplied coordinates are never trusted. Absent/no-op => null =>
+// the pipeline behaves exactly as before.
+function parseEdit(body) {
+  const rot = parseInt(body.rotate, 10);
+  const rotate = [90, 180, 270].includes(rot) ? rot : 0;
+  const flipH = body.flipH === '1' || body.flipH === 'true';
+  const flipV = body.flipV === '1' || body.flipV === 'true';
+
+  let crop = null;
+  const cx = parseInt(body.cropX, 10), cy = parseInt(body.cropY, 10);
+  const cw = parseInt(body.cropW, 10), ch = parseInt(body.cropH, 10);
+  if ([cx, cy, cw, ch].every(Number.isFinite) && cw > 0 && ch > 0 && cx >= 0 && cy >= 0) {
+    crop = { x: cx, y: cy, w: cw, h: ch };
+  }
+
+  // Aspect only applies when there's no explicit rectangle. 'free'/'orig' (and
+  // anything unrecognised) leave aspect null. '1:1' etc. match the regex.
+  let aspect = null;
+  if (!crop && typeof body.aspect === 'string') {
+    const m = /^(\d{1,4}):(\d{1,4})$/.exec(body.aspect);
+    if (m) {
+      const aw = parseInt(m[1], 10), ah = parseInt(m[2], 10);
+      if (aw > 0 && ah > 0) aspect = { ar: aw / ah };
+    }
+  }
+
+  let focus = null;
+  const fx = parseFloat(body.focusX), fy = parseFloat(body.focusY);
+  if (Number.isFinite(fx) && Number.isFinite(fy)) focus = { x: clamp01(fx), y: clamp01(fy) };
+
+  const smartCrop = body.smartCrop === 'entropy' ? 'entropy' : 'attention';
+
+  // No-op edit (nothing that changes pixels) => null, so passthrough stays live.
+  if (!crop && !rotate && !flipH && !flipV && !aspect) return null;
+  // Focus is only meaningful for an aspect cover-crop; drop it otherwise.
+  return { crop, rotate, flipH, flipV, aspect, focus: aspect ? focus : null, smartCrop };
+}
+
 // PERF-01: bounded concurrent processing within a single request.
-// Images and videos run in independent worker pools concurrently — video
+// Images and videos run in independent worker pools concurrently - video
 // encodes are slow and CPU-heavy (libx264 already threads across cores),
 // so they get a much smaller pool than the cheap-per-call image pipeline.
 async function processFiles(files, opts, videoOpts) {
@@ -360,6 +403,8 @@ app.post(
       isBanner:  req.body.isBanner === 'true' || req.body.isBanner === '1',
       minWidth:  parseInt(req.body.minWidth,  10) || 0,
       minHeight: parseInt(req.body.minHeight, 10) || 0,
+      // Optional pre-compression edit (crop/rotate/flip/aspect-focus); null when absent.
+      edit:      parseEdit(req.body),
     };
 
     const videoOpts = {

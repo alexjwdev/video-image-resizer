@@ -70,7 +70,23 @@ async function smoke() {
     { file: 'graphic.png', format: 'webp', opts: {} },
     // conflict: protected banner width + a tiny target it cannot meet at full width
     { file: 'banner.jpg', format: 'jpeg', opts: { isBanner: true, targetBytes: 2 * 1024 }, expectConflict: true },
+    // --- pre-compression edit (crop / aspect / rotate) ---
+    // explicit crop rect: 4:3 region; aspect must survive the downscale ladder
+    { file: 'photo.jpg', format: 'jpeg', opts: { edit: { crop: { x: 0, y: 0, w: 400, h: 300 } } },
+      check: (r) => arOk(r, 4 / 3) },
+    // aspect cover-crop with content-aware attention (no focus point)
+    { file: 'photo.jpg', format: 'jpeg', opts: { edit: { aspect: { ar: 16 / 9 }, smartCrop: 'attention' } },
+      check: (r) => arOk(r, 16 / 9) },
+    // 90-degree rotate: a landscape sample must come out portrait
+    { file: 'photo.jpg', format: 'webp', opts: { edit: { rotate: 90 } },
+      check: (r) => r.original.height > r.original.width },
+    // out-of-bounds crop: must clamp (not throw) and still meet target
+    { file: 'photo.jpg', format: 'jpeg', opts: { edit: { crop: { x: 999999, y: 0, w: 400, h: 300 } } },
+      check: (r) => !!r.result && r.result.size > 0 },
   ];
+
+  // Aspect-ratio check with tolerance (integer rounding through the ladder).
+  const arOk = (r, ar) => Math.abs((r.result.width / r.result.height) - ar) < 0.03;
 
   console.log(`\nimage-resizer smoke — target ${TARGET / 1024} KB (unless noted)\n`);
   let failures = 0;
@@ -91,9 +107,10 @@ async function smoke() {
       console.log(`        hitTarget      ${kb(r.hitTarget.size)}  ${r.hitTarget.width}x${r.hitTarget.height}  (<= target: ${okHit})`);
     } else {
       const under = r.result.size <= target;
-      const pass = under && !c.expectConflict;
+      const checkOk = c.check ? c.check(r) : true;
+      const pass = under && checkOk && !c.expectConflict;
       if (!pass) failures++;
-      console.log(`${pass ? 'PASS' : 'FAIL'}  ${tag}`);
+      console.log(`${pass ? 'PASS' : 'FAIL'}  ${tag}${c.check ? (checkOk ? '  [check ok]' : '  [CHECK FAILED]') : ''}`);
       console.log(`        ${r.original.width}x${r.original.height} ${kb(r.original.size)}  ->  ${r.result.width}x${r.result.height} ${kb(r.result.size)} q${r.result.quality} ${r.format}`);
     }
   }
