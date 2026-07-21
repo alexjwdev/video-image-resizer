@@ -49,11 +49,32 @@ const els = {
   overlay:       $('#overlay'),
   imageSettings: $('#imageSettings'),
   videoSettings: $('#videoSettings'),
+  editAllBtn:    $('#editAllBtn'),
+  editOverlay:   $('#editOverlay'),
 };
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 const fmtKB = (b) => (b / 1024).toFixed(b < 10 * 1024 ? 1 : 0) + ' KB';
 const pct   = (a, b) => a > 0 ? Math.round((1 - b / a) * 100) : 0;
+const clamp01 = (v) => Math.max(0, Math.min(1, v));
+
+// The pre-compress editor draws into a <canvas> and can only crop images the
+// browser can decode via <img>. GIF is excluded because cropping flattens the
+// animation; HEIC/HEIF because most browsers can't decode them in an <img>.
+const EDIT_BLOCK = /^image\/(gif|hei[cf]|heif-sequence)$/i;
+function isEditable(file) {
+  return file.type.startsWith('image/') && !EDIT_BLOCK.test(file.type);
+}
+
+// An edit only matters if it actually changes pixels. 'free'/'orig' aspect
+// strings never match the ratio regex, so they alone are no-ops (as on the
+// server). Mirrors server.js parseEdit's "no-op => null" rule.
+const ASPECT_RE = /^\d{1,4}:\d{1,4}$/;
+function editIsMeaningful(edit) {
+  if (!edit) return false;
+  return !!(edit.crop || edit.rotate || edit.flipH || edit.flipV ||
+    (!edit.crop && edit.aspectStr && ASPECT_RE.test(edit.aspectStr)));
+}
 
 function showError(msg) {
   els.error.textContent = msg;
@@ -91,7 +112,7 @@ function addFiles(fileList) {
       showError(`Limit is ${limit} files - adjust "Max files" in options to add more.`);
       break;
     }
-    state.queue.push({ id: ++queueSeq, file: f, previewUrl: URL.createObjectURL(f), status: 'pending' });
+    state.queue.push({ id: ++queueSeq, file: f, previewUrl: URL.createObjectURL(f), status: 'pending', edit: null });
   }
   renderQueue();
   refreshActions();
@@ -166,8 +187,35 @@ function buildQueueRow(item) {
   sizeSpan.className = 'qi-size';
   sizeSpan.textContent = fmtKB(item.file.size);
 
-  row.append(thumb, nameSpan, sizeSpan, buildStatusEl(item.status, item.id));
+  // Editable images get an "Edit" button + an "edited" chip; video/GIF/HEIC
+  // don't (see isEditable), so their rows keep the original layout.
+  if (isEditable(item.file)) {
+    const chip = document.createElement('span');
+    chip.className = 'qi-chip';
+    chip.textContent = 'edited';
+    chip.hidden = !editIsMeaningful(item.edit);
+
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'qi-edit';
+    editBtn.textContent = 'Edit';
+    editBtn.addEventListener('click', () => openEditor(item, false));
+
+    row.append(thumb, nameSpan, chip, sizeSpan, editBtn, buildStatusEl(item.status, item.id));
+  } else {
+    row.append(thumb, nameSpan, sizeSpan, buildStatusEl(item.status, item.id));
+  }
   return row;
+}
+
+// After the editor writes to item.edit, toggle just that row's "edited" chip
+// (renderQueue does surgical add/remove only, never content updates).
+function refreshRowEdit(id) {
+  const item = state.queue.find((q) => q.id === id);
+  const row  = queueRowMap.get(id);
+  if (!item || !row) return;
+  const chip = row.querySelector('.qi-chip');
+  if (chip) chip.hidden = !editIsMeaningful(item.edit);
 }
 
 // Show only the settings relevant to what's actually queued (images vs.
@@ -239,6 +287,7 @@ function refreshActions() {
   els.queueCount.textContent   = n ? `${n} file${n > 1 ? 's' : ''} selected` : '';
   els.compressBtn.disabled = n === 0;
   els.clearBtn.disabled    = n === 0;
+  els.editAllBtn.disabled  = !state.queue.some((q) => isEditable(q.file));
 }
 
 // ── progress ──────────────────────────────────────────────────────────────────
@@ -308,6 +357,9 @@ async function compress() {
       const fd = new FormData();
       for (const [k, v] of Object.entries(opts)) fd.append(k, v);
       fd.append('files', item.file, item.file.name);
+      // Per-file edit is additive - global opts stay batch-wide, and the wire
+      // is already one file per request, so no protocol change is needed.
+      if (isEditable(item.file)) appendEdit(fd, item.edit);
 
       try {
         const resp = await fetch('/api/compress', { method: 'POST', body: fd });
@@ -574,6 +626,477 @@ function renderConflictInOverlay(ov, stage, slider, r, entry) {
   choose('keep');
 }
 
+// ── pre-compress editor ─────────────────────────────────────────────────────
+//
+// Client-side crop/rotate/flip/focus editor. It sends only GEOMETRY to the
+// server (never re-encoded pixels), matching the existing architecture. The
+// canvas is drawn in the SAME "baked" pixel space the server crops in: EXIF
+// auto-orient (the browser does this for <img>) + user rotate/flip. So a crop
+// rectangle read off the canvas maps 1:1 to the server's extract() rectangle.
+// See lib/compress.js applyEdit()'s two-stage bake for the server side.
+
+// Live editor state (one modal, reused across opens).
+const ed = {
+  item: null, applyAll: false, img: null,
+  natW: 0, natH: 0,            // oriented natural dims (browser applies EXIF)
+  bakedW: 0, bakedH: 0,        // dims after user rotate (90/270 swap)
+  rotate: 0, flipH: false, flipV: false,
+  aspect: 'free', ar: null, aspectStr: 'free',
+  smartCrop: 'attention',
+  crop: null,                  // {x,y,w,h} in baked px (scope 'one')
+  focus: null,                 // {x,y} normalized 0..1 baked (scope 'all')
+  zoom: 1, k: 1,               // k = css px per baked px (display scale)
+  drag: null,
+};
+
+// Editor element refs, resolved once at setup.
+let ee = null;
+
+// Plain-language, example-led hint per aspect preset (shown in one contextual
+// line instead of six always-visible descriptions - keeps the panel uncluttered).
+const ASPECT_HINTS = {
+  free:   'Free - drag out a box to crop to any shape.',
+  '1:1':  '1:1 square - avatars, product tiles, Instagram posts.',
+  '4:3':  '4:3 - classic photo shape, good for print.',
+  '16:9': '16:9 widescreen - slides, video thumbnails, hero banners.',
+  orig:   'Original - keep this image\'s current proportions.',
+  custom: 'Custom - type your own width : height (e.g. 3 : 2).',
+};
+
+// Largest `ar` rectangle that fits w x h (mirrors compress.js coverRect - so
+// the on-canvas preview matches what the server actually extracts).
+function coverRect(w, h, ar) {
+  if (w / h > ar) return { w: Math.round(h * ar), h };
+  return { w, h: Math.round(w / ar) };
+}
+
+function bakedDims() {
+  return (ed.rotate === 90 || ed.rotate === 270)
+    ? { w: ed.natH, h: ed.natW }
+    : { w: ed.natW, h: ed.natH };
+}
+
+function recomputeBaked() {
+  const d = bakedDims();
+  ed.bakedW = d.w; ed.bakedH = d.h;
+  const maxW = 600, maxH = 460;
+  // Fit into the stage; allow modest upscaling for tiny images so they're usable.
+  ed.k = Math.min(maxW / ed.bakedW, maxH / ed.bakedH, 4);
+}
+
+function clampCrop(c) {
+  const w = Math.min(Math.max(8, c.w), ed.bakedW);
+  const h = Math.min(Math.max(8, c.h), ed.bakedH);
+  const x = Math.max(0, Math.min(c.x, ed.bakedW - w));
+  const y = Math.max(0, Math.min(c.y, ed.bakedH - h));
+  return { x, y, w, h };
+}
+
+// Centered, largest crop of the current aspect (null ar = full image).
+function defaultCrop() {
+  if (!ed.ar) return { x: 0, y: 0, w: ed.bakedW, h: ed.bakedH };
+  const { w, h } = coverRect(ed.bakedW, ed.bakedH, ed.ar);
+  return { x: Math.round((ed.bakedW - w) / 2), y: Math.round((ed.bakedH - h) / 2), w, h };
+}
+
+// Region the server would keep for an aspect + focus cover-crop (apply-to-all
+// preview). With no focus the server uses attention/entropy, so this centered
+// guess is only indicative - the dims label says "(smart)" in that case.
+function previewRegion() {
+  const { w: cw, h: ch } = coverRect(ed.bakedW, ed.bakedH, ed.ar);
+  const f = ed.focus || { x: 0.5, y: 0.5 };
+  const x = Math.max(0, Math.min(Math.round(f.x * ed.bakedW - cw / 2), ed.bakedW - cw));
+  const y = Math.max(0, Math.min(Math.round(f.y * ed.bakedH - ch / 2), ed.bakedH - ch));
+  return { x, y, w: cw, h: ch };
+}
+
+function drawCanvas() {
+  const Wc = ed.bakedW * ed.k, Hc = ed.bakedH * ed.k;
+  const dpr = window.devicePixelRatio || 1;
+  const canvas = ee.canvas;
+  canvas.width  = Math.round(Wc * dpr);
+  canvas.height = Math.round(Hc * dpr);
+  canvas.style.width  = Wc + 'px';
+  canvas.style.height = Hc + 'px';
+  ee.stage.style.width = Wc + 'px';
+
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, Wc, Hc);
+  ctx.save();
+  ctx.translate(Wc / 2, Hc / 2);
+  ctx.rotate(ed.rotate * Math.PI / 180);
+  // Transforms compose right-to-left onto the drawn image: scale (flip) first,
+  // then rotate - the SAME order the server bakes them (flip then rotate).
+  ctx.scale(ed.flipH ? -1 : 1, ed.flipV ? -1 : 1);
+  ctx.drawImage(ed.img, -ed.natW * ed.k / 2, -ed.natH * ed.k / 2, ed.natW * ed.k, ed.natH * ed.k);
+  ctx.restore();
+}
+
+function showRect(c, preview) {
+  const el = ee.cropRect;
+  el.hidden = false;
+  el.classList.toggle('crop-rect--preview', preview);
+  el.style.left   = (c.x * ed.k) + 'px';
+  el.style.top    = (c.y * ed.k) + 'px';
+  el.style.width  = (c.w * ed.k) + 'px';
+  el.style.height = (c.h * ed.k) + 'px';
+}
+
+function renderOverlay() {
+  if (ed.applyAll) {
+    ee.focusMarker.hidden = !ed.ar;
+    if (ed.ar) {
+      showRect(previewRegion(), true);
+      const f = ed.focus || { x: 0.5, y: 0.5 };
+      ee.focusMarker.style.left = (f.x * ed.bakedW * ed.k) + 'px';
+      ee.focusMarker.style.top  = (f.y * ed.bakedH * ed.k) + 'px';
+      ee.dims.textContent = `Each image cropped to ${ed.aspectStr}` +
+        (ed.focus ? ' at focus point' : ' (smart)');
+    } else {
+      ee.cropRect.hidden = true;
+      ee.dims.textContent = (ed.rotate || ed.flipH || ed.flipV)
+        ? 'Rotate / flip applied to all images'
+        : 'Pick a ratio to crop all images';
+    }
+  } else {
+    ee.focusMarker.hidden = true;
+    if (ed.crop) {
+      showRect(ed.crop, false);
+      ee.dims.textContent = `${Math.round(ed.crop.w)} × ${Math.round(ed.crop.h)} px`;
+    } else {
+      ee.cropRect.hidden = true;
+      ee.dims.textContent = `${ed.bakedW} × ${ed.bakedH} px (full)`;
+    }
+  }
+}
+
+// zoom (scope 'one', aspect-locked): shrink the crop around its center.
+function applyZoom() {
+  if (!ed.ar || ed.applyAll) return;
+  const base = coverRect(ed.bakedW, ed.bakedH, ed.ar);
+  const w = Math.max(8, Math.round(base.w / ed.zoom));
+  const h = Math.max(8, Math.round(base.h / ed.zoom));
+  const cx = ed.crop ? ed.crop.x + ed.crop.w / 2 : ed.bakedW / 2;
+  const cy = ed.crop ? ed.crop.y + ed.crop.h / 2 : ed.bakedH / 2;
+  ed.crop = clampCrop({ x: Math.round(cx - w / 2), y: Math.round(cy - h / 2), w, h });
+}
+
+// ── editor pointer logic (mirrors setupCompare's drag pattern) ───────────────
+function stagePoint(e) {
+  const rect = ee.stage.getBoundingClientRect();
+  return { bx: (e.clientX - rect.left) / ed.k, by: (e.clientY - rect.top) / ed.k };
+}
+
+function onEdPointerDown(e) {
+  const { bx, by } = stagePoint(e);
+  if (ed.applyAll) {
+    if (!ed.ar) return;               // free + apply-to-all has no focus target
+    ed.focus = { x: clamp01(bx / ed.bakedW), y: clamp01(by / ed.bakedH) };
+    ed.drag = { mode: 'focus' };
+  } else {
+    const h = e.target && e.target.dataset ? e.target.dataset.h : null;
+    if (h && ed.crop) {
+      ed.drag = { mode: 'resize', h, start: { ...ed.crop } };
+    } else if (ed.crop && bx >= ed.crop.x && bx <= ed.crop.x + ed.crop.w &&
+               by >= ed.crop.y && by <= ed.crop.y + ed.crop.h) {
+      ed.drag = { mode: 'move', start: { ...ed.crop }, bx, by };
+    } else if (ed.ar) {
+      // aspect-locked: a click recenters the fixed-size crop on that point
+      const c = ed.crop || defaultCrop();
+      ed.crop = clampCrop({ x: Math.round(bx - c.w / 2), y: Math.round(by - c.h / 2), w: c.w, h: c.h });
+      ed.drag = { mode: 'move', start: { ...ed.crop }, bx, by };
+    } else {
+      // free: drag out a new rectangle from here
+      ed.crop = { x: bx, y: by, w: 8, h: 8 };
+      ed.drag = { mode: 'new', bx, by };
+    }
+  }
+  renderOverlay();
+  window.addEventListener('pointermove', onEdPointerMove);
+  window.addEventListener('pointerup', onEdPointerUp);
+  e.preventDefault();
+}
+
+function resizeCrop(d, bx, by) {
+  const s = d.h, st = d.start;
+  let left = st.x, top = st.y, right = st.x + st.w, bottom = st.y + st.h;
+  if (s.includes('w')) left = bx;
+  if (s.includes('e')) right = bx;
+  if (s.includes('n')) top = by;
+  if (s.includes('s')) bottom = by;
+  let x = Math.min(left, right), y = Math.min(top, bottom);
+  let w = Math.max(8, Math.abs(right - left)), h = Math.max(8, Math.abs(bottom - top));
+
+  if (ed.ar) {
+    // Keep the ratio, anchored on the edge/corner opposite the dragged handle.
+    const anchorX = s.includes('w') ? st.x + st.w : st.x;
+    const anchorY = s.includes('n') ? st.y + st.h : st.y;
+    if (s === 'n' || s === 's') { w = Math.round(h * ed.ar); x = st.x + (st.w - w) / 2; }
+    else                        { h = Math.round(w / ed.ar); }
+    if (s.includes('w')) x = anchorX - w; else if (s !== 'n' && s !== 's') x = anchorX;
+    if (s === 'e' || s === 'w') y = st.y + (st.h - h) / 2;
+    else if (s.includes('n'))   y = anchorY - h; else y = anchorY;
+  }
+  return clampCrop({ x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) });
+}
+
+function onEdPointerMove(e) {
+  const d = ed.drag;
+  if (!d) return;
+  const { bx, by } = stagePoint(e);
+  if (d.mode === 'focus') {
+    ed.focus = { x: clamp01(bx / ed.bakedW), y: clamp01(by / ed.bakedH) };
+  } else if (d.mode === 'move') {
+    ed.crop = clampCrop({ x: Math.round(d.start.x + (bx - d.bx)), y: Math.round(d.start.y + (by - d.by)), w: d.start.w, h: d.start.h });
+  } else if (d.mode === 'new') {
+    ed.crop = clampCrop({ x: Math.min(d.bx, bx), y: Math.min(d.by, by), w: Math.abs(bx - d.bx), h: Math.abs(by - d.by) });
+  } else if (d.mode === 'resize') {
+    ed.crop = resizeCrop(d, bx, by);
+  }
+  renderOverlay();
+}
+
+function onEdPointerUp() {
+  ed.drag = null;
+  window.removeEventListener('pointermove', onEdPointerMove);
+  window.removeEventListener('pointerup', onEdPointerUp);
+}
+
+// ── editor control state ─────────────────────────────────────────────────────
+function setAspect(val) {
+  ed.aspect = val;
+  ee.custom.hidden = val !== 'custom';
+  if (val === 'free')      { ed.ar = null; ed.aspectStr = 'free'; ed.crop = null; }
+  else if (val === 'orig') { ed.ar = ed.bakedW / ed.bakedH; ed.aspectStr = 'orig'; ed.crop = ed.applyAll ? null : defaultCrop(); }
+  else if (val === 'custom') {
+    const w = parseInt(ee.customW.value, 10), h = parseInt(ee.customH.value, 10);
+    if (w > 0 && h > 0) { ed.ar = w / h; ed.aspectStr = `${w}:${h}`; ed.crop = ed.applyAll ? null : defaultCrop(); }
+  } else {
+    const [w, h] = val.split(':').map(Number);
+    ed.ar = w / h; ed.aspectStr = val; ed.crop = ed.applyAll ? null : defaultCrop();
+  }
+  ed.zoom = 1;
+  syncControlsUI();
+  renderOverlay();
+}
+
+// Reflect ed.* into the control widgets (active chips, groups, zoom, flips).
+function syncControlsUI() {
+  ee.aspectChips.forEach((b) => b.classList.toggle('active', b.dataset.aspect === ed.aspect));
+  ee.smartChips.forEach((b) => b.classList.toggle('active', b.dataset.smart === ed.smartCrop));
+  ee.scopeChoices.forEach((b) => b.classList.toggle('active', (b.dataset.scope === 'all') === ed.applyAll));
+  ee.flipHBtn.classList.toggle('active', ed.flipH);
+  ee.flipVBtn.classList.toggle('active', ed.flipV);
+  ee.custom.hidden = ed.aspect !== 'custom';
+  ee.zoomGroup.hidden  = ed.applyAll || !ed.ar;
+  ee.smartGroup.hidden = !ed.applyAll || !ed.ar;
+  ee.zoomRange.value = Math.round(ed.zoom * 100);
+  ee.zoomVal.textContent = ed.zoom.toFixed(1) + '×';
+  ee.aspectHint.textContent = ASPECT_HINTS[ed.aspect] || '';
+  ee.scopeHint.textContent = ed.applyAll
+    ? 'Click the image to set the focus point kept in every crop.'
+    : 'Drag the box or its handles to frame just this image.';
+}
+
+// ── open / save / close ──────────────────────────────────────────────────────
+function openEditor(item, applyAll) {
+  if (!isEditable(item.file)) return;
+  setupEditorOnce();
+  ed.item = item;
+  ed.applyAll = !!applyAll;
+
+  const e = item.edit || {};
+  ed.rotate = e.rotate || 0;
+  ed.flipH  = !!e.flipH;
+  ed.flipV  = !!e.flipV;
+  // Map a saved ratio back to its chip; a non-preset ratio (e.g. "3:2") is "custom".
+  const PRESETS = ['free', '1:1', '4:3', '16:9', 'orig'];
+  ed.aspectStr = e.aspectStr || 'free';
+  ed.aspect = PRESETS.includes(ed.aspectStr) ? ed.aspectStr : 'custom';
+  ed.ar     = e.ar || null;
+  ed.smartCrop = e.smartCrop || 'attention';
+  ed.focus  = e.focus || null;
+  ed.crop   = applyAll ? null : (e.crop || null);
+  ed.zoom   = 1;
+  ee.fname.textContent = applyAll
+    ? `Edit all - ${state.queue.filter((q) => isEditable(q.file)).length} images`
+    : item.file.name;
+
+  ed.img = new Image();
+  ed.img.onload = () => {
+    ed.natW = ed.img.naturalWidth;
+    ed.natH = ed.img.naturalHeight;
+    recomputeBaked();
+    if (!ed.applyAll && ed.ar && !ed.crop) ed.crop = defaultCrop();
+    if (ed.aspect === 'custom' && ed.aspectStr.includes(':')) {
+      const [cw, ch] = ed.aspectStr.split(':');
+      ee.customW.value = cw; ee.customH.value = ch;
+    }
+    syncControlsUI();
+    drawCanvas();
+    renderOverlay();
+  };
+  ed.img.src = item.previewUrl;
+
+  els.editOverlay.hidden = false;
+  document.body.classList.add('overlay-open');
+  els.editOverlay.focus();
+}
+
+// Snapshot the live state into a serialisable edit. A crop that covers the full
+// baked image is dropped to null (so 'orig'/'free' with no transform is a true
+// no-op, matching the server).
+function snapshotEdit() {
+  let crop = ed.crop;
+  if (crop && crop.x <= 0 && crop.y <= 0 && crop.w >= ed.bakedW && crop.h >= ed.bakedH) crop = null;
+  return {
+    crop, aspectStr: ed.aspectStr, ar: ed.ar,
+    rotate: ed.rotate, flipH: ed.flipH, flipV: ed.flipV,
+    focus: ed.focus, smartCrop: ed.smartCrop,
+  };
+}
+
+function saveEditor() {
+  if (ed.applyAll) {
+    // Per-image server cover-crop: one ratio + shared normalized focus, no
+    // explicit rectangle (images differ in size). Focus is size-independent.
+    const tmpl = {
+      crop: null, aspectStr: ed.aspectStr, ar: ed.ar,
+      rotate: ed.rotate, flipH: ed.flipH, flipV: ed.flipV,
+      focus: ed.ar ? ed.focus : null, smartCrop: ed.smartCrop,
+    };
+    for (const it of state.queue) {
+      if (!isEditable(it.file)) continue;
+      it.edit = { ...tmpl };
+      refreshRowEdit(it.id);
+    }
+  } else {
+    ed.item.edit = snapshotEdit();
+    refreshRowEdit(ed.item.id);
+  }
+  closeEditor();
+}
+
+function resetEditor() {
+  ed.rotate = 0; ed.flipH = false; ed.flipV = false;
+  ed.aspect = 'free'; ed.ar = null; ed.aspectStr = 'free';
+  ed.smartCrop = 'attention'; ed.crop = null; ed.focus = null; ed.zoom = 1;
+  recomputeBaked();
+  syncControlsUI();
+  drawCanvas();
+  renderOverlay();
+}
+
+function closeEditor() {
+  onEdPointerUp();                    // drop any in-flight drag listeners
+  els.editOverlay.hidden = true;
+  document.body.classList.remove('overlay-open');
+  ed.img = null;
+}
+
+// One-time listener wiring for the editor controls.
+let editorReady = false;
+function setupEditorOnce() {
+  if (editorReady) return;
+  editorReady = true;
+  const ov = els.editOverlay;
+  ee = {
+    stage:  $('#editStage', ov),
+    canvas: $('#editCanvas', ov),
+    cropRect: $('#cropRect', ov),
+    focusMarker: $('#focusMarker', ov),
+    dims: $('#editDims', ov),
+    fname: $('#editFname', ov),
+    custom: $('#editCustom', ov),
+    customW: $('#customW', ov),
+    customH: $('#customH', ov),
+    zoomGroup: $('#zoomGroup', ov),
+    zoomRange: $('#zoomRange', ov),
+    zoomVal: $('#zoomVal', ov),
+    smartGroup: $('#smartGroup', ov),
+    scopeHint: $('#scopeHint', ov),
+    aspectHint: $('#aspectHint', ov),
+    aspectChips: Array.from(ov.querySelectorAll('#aspectChips .edit-chip')),
+    smartChips:  Array.from(ov.querySelectorAll('#smartChips .edit-chip')),
+    scopeChoices: Array.from(ov.querySelectorAll('#editScope .choice')),
+    flipHBtn: $('#flipHBtn', ov),
+    flipVBtn: $('#flipVBtn', ov),
+  };
+
+  ee.stage.addEventListener('pointerdown', onEdPointerDown);
+
+  ee.aspectChips.forEach((b) => {
+    b.addEventListener('click', () => setAspect(b.dataset.aspect));
+    // Hover previews that ratio's hint, reverting to the selected one on leave.
+    b.addEventListener('mouseenter', () => { ee.aspectHint.textContent = ASPECT_HINTS[b.dataset.aspect] || ''; });
+    b.addEventListener('mouseleave', () => { ee.aspectHint.textContent = ASPECT_HINTS[ed.aspect] || ''; });
+  });
+  $('#customApply', ov).addEventListener('click', () => setAspect('custom'));
+
+  ee.smartChips.forEach((b) => b.addEventListener('click', () => {
+    ed.smartCrop = b.dataset.smart; syncControlsUI(); renderOverlay();
+  }));
+
+  ee.scopeChoices.forEach((b) => b.addEventListener('click', () => {
+    ed.applyAll = b.dataset.scope === 'all';
+    // Scope 'one' needs an explicit crop for a locked ratio; 'all' uses focus.
+    ed.crop = (!ed.applyAll && ed.ar) ? defaultCrop() : null;
+    if (ed.applyAll && ed.ar && !ed.focus) ed.focus = { x: 0.5, y: 0.5 };
+    syncControlsUI(); renderOverlay();
+  }));
+
+  $('#rotateBtn', ov).addEventListener('click', () => {
+    ed.rotate = (ed.rotate + 90) % 360;
+    recomputeBaked();
+    ed.crop = (!ed.applyAll && ed.ar) ? defaultCrop() : null;
+    drawCanvas(); renderOverlay();
+  });
+  ee.flipHBtn.addEventListener('click', () => {
+    ed.flipH = !ed.flipH;
+    if (ed.crop) ed.crop.x = ed.bakedW - (ed.crop.x + ed.crop.w);  // mirror framing
+    syncControlsUI(); drawCanvas(); renderOverlay();
+  });
+  ee.flipVBtn.addEventListener('click', () => {
+    ed.flipV = !ed.flipV;
+    if (ed.crop) ed.crop.y = ed.bakedH - (ed.crop.y + ed.crop.h);
+    syncControlsUI(); drawCanvas(); renderOverlay();
+  });
+
+  ee.zoomRange.addEventListener('input', () => {
+    ed.zoom = Math.max(1, parseInt(ee.zoomRange.value, 10) / 100);
+    ee.zoomVal.textContent = ed.zoom.toFixed(1) + '×';
+    applyZoom(); renderOverlay();
+  });
+
+  $('#editReset', ov).addEventListener('click', resetEditor);
+  $('#editSave', ov).addEventListener('click', saveEditor);
+  $('#editClose', ov).addEventListener('click', closeEditor);
+  $('.overlay-bg', ov).addEventListener('click', closeEditor);
+}
+
+// Translate the stored edit into the server's per-file form fields. Crop wins
+// over aspect (as in parseEdit); focus/smartCrop only ride along with aspect.
+function appendEdit(fd, edit) {
+  if (!editIsMeaningful(edit)) return;
+  if (edit.rotate) fd.append('rotate', String(edit.rotate));
+  if (edit.flipH)  fd.append('flipH', '1');
+  if (edit.flipV)  fd.append('flipV', '1');
+  if (edit.crop) {
+    fd.append('cropX', String(Math.round(edit.crop.x)));
+    fd.append('cropY', String(Math.round(edit.crop.y)));
+    fd.append('cropW', String(Math.round(edit.crop.w)));
+    fd.append('cropH', String(Math.round(edit.crop.h)));
+  } else if (edit.aspectStr && ASPECT_RE.test(edit.aspectStr)) {
+    fd.append('aspect', edit.aspectStr);
+    fd.append('smartCrop', edit.smartCrop || 'attention');
+    if (edit.focus) {
+      fd.append('focusX', edit.focus.x.toFixed(4));
+      fd.append('focusY', edit.focus.y.toFixed(4));
+    }
+  }
+}
+
 // ── ZIP ───────────────────────────────────────────────────────────────────────
 async function downloadZip() {
   if (!state.downloads.length || typeof fflate === 'undefined') return;
@@ -629,11 +1152,19 @@ els.compressBtn.addEventListener('click', compress);
 els.clearBtn.addEventListener('click',    clearAll);
 els.zipBtn.addEventListener('click',      downloadZip);
 
+// Edit all: open the editor on the first editable image in apply-to-all mode.
+els.editAllBtn.addEventListener('click', () => {
+  const first = state.queue.find((q) => isEditable(q.file));
+  if (first) openEditor(first, true);
+});
+
 // Overlay close: button, backdrop click, Escape key
 $('#overlayClose').addEventListener('click', closeOverlay);
 $('.overlay-bg', els.overlay).addEventListener('click', closeOverlay);
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && !els.overlay.hidden) closeOverlay();
+  if (e.key !== 'Escape') return;
+  if (!els.editOverlay.hidden) closeEditor();
+  else if (!els.overlay.hidden) closeOverlay();
 });
 
 // ── branding (env-driven server-side, applied client-side at runtime) ─────────

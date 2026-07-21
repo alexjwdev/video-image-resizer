@@ -103,6 +103,10 @@
     <div class="actionbar">
       <span id="queueCount" class="queue-count"></span>
       <div class="actions">
+        <button type="button" id="editAllBtn" class="btn ghost" disabled>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon"><path d="M6 6h12v12H6z"/><path d="M3 9h3M3 15h3M18 9h3M18 15h3M9 3v3M15 3v3M9 18v3M15 18v3"/></svg>
+          Edit all
+        </button>
         <button type="button" id="clearBtn" class="btn ghost" disabled>Clear all</button>
         <button type="button" id="compressBtn" class="btn primary" disabled>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon"><path d="M9 3H5a2 2 0 00-2 2v4m6-6h10a2 2 0 012 2v4M9 3v18m0 0h10a2 2 0 002-2V9M9 21H5a2 2 0 01-2-2V9m0 0h18"/></svg>
@@ -179,6 +183,107 @@
       <div class="overlay-stats"></div>
       <div class="overlay-conflict" hidden></div>
       <div class="overlay-actions"></div>
+    </div>
+  </div>
+
+  <!-- Pre-compress edit overlay (crop / focus / rotate) -->
+  <div id="editOverlay" class="overlay edit-overlay" hidden role="dialog" aria-modal="true" tabindex="-1">
+    <div class="overlay-bg" data-edit-close></div>
+    <div class="overlay-panel edit-panel">
+      <header class="overlay-head">
+        <span class="overlay-fname" id="editFname"></span>
+        <button id="editClose" class="overlay-close" type="button" aria-label="Close">✕</button>
+      </header>
+
+      <div class="edit-body">
+        <div class="edit-stage-wrap">
+          <div class="edit-stage" id="editStage">
+            <canvas class="edit-canvas" id="editCanvas"></canvas>
+            <div class="crop-rect" id="cropRect" hidden>
+              <span class="crop-handle" data-h="nw"></span>
+              <span class="crop-handle" data-h="n"></span>
+              <span class="crop-handle" data-h="ne"></span>
+              <span class="crop-handle" data-h="e"></span>
+              <span class="crop-handle" data-h="se"></span>
+              <span class="crop-handle" data-h="s"></span>
+              <span class="crop-handle" data-h="sw"></span>
+              <span class="crop-handle" data-h="w"></span>
+            </div>
+            <div class="focus-marker" id="focusMarker" hidden></div>
+          </div>
+          <p class="edit-dims" id="editDims"></p>
+        </div>
+
+        <div class="edit-controls">
+          <div class="edit-group">
+            <span class="edit-label">Aspect ratio</span>
+            <div class="edit-chips" id="aspectChips">
+              <button type="button" class="edit-chip active" data-aspect="free">Free</button>
+              <button type="button" class="edit-chip" data-aspect="1:1">1:1</button>
+              <button type="button" class="edit-chip" data-aspect="4:3">4:3</button>
+              <button type="button" class="edit-chip" data-aspect="16:9">16:9</button>
+              <button type="button" class="edit-chip" data-aspect="orig">Original</button>
+              <button type="button" class="edit-chip" data-aspect="custom">Custom</button>
+            </div>
+            <div class="edit-custom" id="editCustom" hidden>
+              <input type="number" id="customW" min="1" max="9999" placeholder="W" />
+              <span>:</span>
+              <input type="number" id="customH" min="1" max="9999" placeholder="H" />
+              <button type="button" class="btn" id="customApply">Set</button>
+            </div>
+            <small class="opt-help edit-hint" id="aspectHint"></small>
+          </div>
+
+          <div class="edit-group">
+            <span class="edit-label">Transform</span>
+            <div class="edit-btns">
+              <button type="button" class="btn" id="rotateBtn" title="Rotate the image 90° clockwise. Click again for 180° / 270°.">⟳ Rotate</button>
+              <button type="button" class="btn" id="flipHBtn" title="Mirror left-to-right (e.g. face someone the other way).">⇋ Flip H</button>
+              <button type="button" class="btn" id="flipVBtn" title="Mirror top-to-bottom (upside down).">⇅ Flip V</button>
+            </div>
+          </div>
+
+          <div class="edit-group" id="zoomGroup">
+            <span class="edit-label">Zoom <span id="zoomVal">1.0×</span></span>
+            <input type="range" id="zoomRange" min="100" max="400" value="100" aria-label="Zoom crop"
+              title="Tighten the crop box, then drag it to reframe. 2× keeps half the width/height." />
+            <small class="opt-help edit-hint">Tighten the crop, then drag the box to reframe.</small>
+          </div>
+
+          <div class="edit-group" id="smartGroup" hidden>
+            <span class="edit-label">Auto-crop when no focus set</span>
+            <div class="edit-chips" id="smartChips">
+              <button type="button" class="edit-chip active" data-smart="attention"
+                title="Keeps the most eye-catching area - faces, subjects, high contrast. Best for photos.">Subject</button>
+              <button type="button" class="edit-chip" data-smart="entropy"
+                title="Keeps the busiest, most detailed area. Better for textures or documents.">Detail</button>
+            </div>
+            <small class="opt-help edit-hint">Only used for images where you don't click a focus point.</small>
+          </div>
+
+          <div class="edit-group">
+            <span class="edit-label">Apply to</span>
+            <div class="conflict-choices edit-scope" id="editScope">
+              <button type="button" class="choice active" data-scope="one"
+                title="Crop exactly the box you draw - only this file changes.">
+                <span class="ctitle">This image</span>
+                <span class="cmeta">Crop just this file</span>
+              </button>
+              <button type="button" class="choice" data-scope="all"
+                title="Apply this ratio, rotate/flip and focus point to every image in the queue.">
+                <span class="ctitle">Apply to all</span>
+                <span class="cmeta">Same ratio + focus, per-image crop</span>
+              </button>
+            </div>
+            <small class="opt-help edit-hint" id="scopeHint"></small>
+          </div>
+        </div>
+      </div>
+
+      <div class="overlay-actions edit-actions">
+        <button type="button" class="btn ghost" id="editReset">Reset</button>
+        <button type="button" class="btn primary" id="editSave">Apply</button>
+      </div>
     </div>
   </div>
 
