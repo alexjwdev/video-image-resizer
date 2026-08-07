@@ -5,6 +5,17 @@ const $ = (sel, root = document) => root.querySelector(sel);
 // ── constants ─────────────────────────────────────────────────────────────────
 const CONCURRENCY = 5;
 
+// Curated starting points so first-time users get sane settings without
+// having to know what to change - selecting one fills the fields below;
+// hand-editing any of them afterward switches the selector to Custom.
+const PRESETS = [
+  { id: 'balanced', label: 'Balanced',     format: 'jpeg', targetKB: 500,  isBanner: false, minWidth: 0, minHeight: 0 },
+  { id: 'small',    label: 'Small File',   format: 'jpeg', targetKB: 150,  isBanner: false, minWidth: 0, minHeight: 0 },
+  { id: 'banner',   label: 'Banner / Ad',  format: 'jpeg', targetKB: 800,  isBanner: true,  minWidth: 0, minHeight: 0 },
+  { id: 'quality',  label: 'High Quality', format: 'webp', targetKB: 1200, isBanner: false, minWidth: 0, minHeight: 0 },
+];
+const PROFILE_KEY = 'resizer.profile';
+
 // ── state ─────────────────────────────────────────────────────────────────────
 let queueSeq = 0;
 const state = {
@@ -51,6 +62,9 @@ const els = {
   videoSettings: $('#videoSettings'),
   editAllBtn:    $('#editAllBtn'),
   editOverlay:   $('#editOverlay'),
+  themeToggle:   $('#themeToggle'),
+  profileSelect: $('#profileSelect'),
+  activeSettingsPill: $('#activeSettingsPill'),
 };
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -60,8 +74,9 @@ const clamp01 = (v) => Math.max(0, Math.min(1, v));
 
 // The pre-compress editor draws into a <canvas> and can only crop images the
 // browser can decode via <img>. GIF is excluded because cropping flattens the
-// animation; HEIC/HEIF because most browsers can't decode them in an <img>.
-const EDIT_BLOCK = /^image\/(gif|hei[cf]|heif-sequence)$/i;
+// animation; HEIC/HEIF (including the -sequence burst/Live-Photo variants)
+// because most browsers can't decode them in an <img>.
+const EDIT_BLOCK = /^image\/(gif|hei[cf](-sequence)?)$/i;
 function isEditable(file) {
   return file.type.startsWith('image/') && !EDIT_BLOCK.test(file.type);
 }
@@ -83,6 +98,56 @@ function showError(msg) {
 
 function batchLimit() {
   return parseInt(els.batchLimit.value, 10) || config.maxFiles;
+}
+
+// ── settings profiles ────────────────────────────────────────────────────────
+function currentFormat() {
+  return document.querySelector('input[name="format"]:checked').value;
+}
+
+function fieldsMatchPreset(preset) {
+  return currentFormat() === preset.format &&
+    (parseInt(els.targetKB.value, 10)  || 0) === preset.targetKB &&
+    els.isBanner.checked                     === preset.isBanner &&
+    (parseInt(els.minWidth.value, 10)  || 0) === (preset.minWidth  || 0) &&
+    (parseInt(els.minHeight.value, 10) || 0) === (preset.minHeight || 0);
+}
+
+function updateSettingsPill() {
+  const preset = PRESETS.find((p) => p.id === els.profileSelect.value);
+  const label  = preset ? preset.label : 'Custom';
+  const targetKB = parseInt(els.targetKB.value, 10) || config.defaultTargetKB;
+  els.activeSettingsPill.textContent =
+    `${label} · ${targetKB}KB · ${currentFormat().toUpperCase()}${els.isBanner.checked ? ' · Banner' : ''}`;
+}
+
+// Applying a preset writes values via .value/.checked, which never fire
+// 'input'/'change' - safe to call during page load without falsely tripping
+// markCustomIfChanged() below.
+function applyPreset(id) {
+  const preset = PRESETS.find((p) => p.id === id);
+  if (!preset) return;
+  const radio = document.querySelector(`input[name="format"][value="${preset.format}"]`);
+  if (radio) radio.checked = true;
+  els.targetKB.value   = preset.targetKB;
+  els.isBanner.checked = preset.isBanner;
+  els.minWidth.value   = preset.minWidth  || '';
+  els.minHeight.value  = preset.minHeight || '';
+  updateSettingsPill();
+}
+
+function selectProfile(id) {
+  els.profileSelect.value = id;
+  applyPreset(id);
+  localStorage.setItem(PROFILE_KEY, id);
+}
+
+// Any manual edit to a field a preset controls falls back to "Custom" -
+// the pill (and the selector) always reflect what will actually be sent.
+function markCustomIfChanged() {
+  const active = PRESETS.find((p) => p.id === els.profileSelect.value);
+  if (active && !fieldsMatchPreset(active)) els.profileSelect.value = 'custom';
+  updateSettingsPill();
 }
 
 // PERF-10: single Uint8Array.from call — no char-by-char loop
@@ -160,7 +225,15 @@ function buildQueueRow(item) {
   const row = document.createElement('div');
   row.className = 'qi qi--' + item.status;
 
-  // An <img> can't decode a video blob URL — it just shows a broken-image
+  // Indeterminate per-row progress (visible only while compressing, purely
+  // via CSS on .qi--compressing). Appended first, never last, so
+  // setQueueItemStatus's `row.lastElementChild.replaceWith(...)` keeps
+  // targeting the status cell and never clobbers this element.
+  const progress = document.createElement('div');
+  progress.className = 'qi-progress';
+  row.appendChild(progress);
+
+  // An <img> can't decode a video blob URL - it just shows a broken-image
   // icon. Video files get a muted <video> thumb instead so the browser can
   // actually paint a frame.
   const isVideo = item.file.type.startsWith('video/');
@@ -895,7 +968,9 @@ function syncControlsUI() {
   ee.zoomVal.textContent = ed.zoom.toFixed(1) + '×';
   ee.aspectHint.textContent = ASPECT_HINTS[ed.aspect] || '';
   ee.scopeHint.textContent = ed.applyAll
-    ? 'Click the image to set the focus point kept in every crop.'
+    ? (ed.ar
+        ? 'Click the image to set the focus point kept in every crop.'
+        : 'Pick an aspect ratio above to crop all images (Free has nothing to apply per-image).')
     : 'Drag the box or its handles to frame just this image.';
 }
 
@@ -923,10 +998,16 @@ function openEditor(item, applyAll) {
     ? `Edit all - ${state.queue.filter((q) => isEditable(q.file)).length} images`
     : item.file.name;
 
+  // Not usable until the preview actually decodes; saveEditor bails while false
+  // so a load failure can never persist an edit built from zero dimensions.
+  ed.ready = false;
+  ed.natW = ed.natH = ed.bakedW = ed.bakedH = 0;
   ed.img = new Image();
   ed.img.onload = () => {
     ed.natW = ed.img.naturalWidth;
     ed.natH = ed.img.naturalHeight;
+    if (!ed.natW || !ed.natH) return ed.img.onerror();
+    ed.ready = true;
     recomputeBaked();
     if (!ed.applyAll && ed.ar && !ed.crop) ed.crop = defaultCrop();
     if (ed.aspect === 'custom' && ed.aspectStr.includes(':')) {
@@ -936,6 +1017,10 @@ function openEditor(item, applyAll) {
     syncControlsUI();
     drawCanvas();
     renderOverlay();
+  };
+  ed.img.onerror = () => {
+    closeEditor();
+    showError(`Couldn't open "${item.file.name}" in the editor - the browser can't decode this image.`);
   };
   ed.img.src = item.previewUrl;
 
@@ -958,6 +1043,7 @@ function snapshotEdit() {
 }
 
 function saveEditor() {
+  if (!ed.ready) return closeEditor();   // image never decoded - nothing to save
   if (ed.applyAll) {
     // Per-image server cover-crop: one ratio + shared normalized focus, no
     // explicit rectangle (images differ in size). Focus is size-independent.
@@ -1152,6 +1238,17 @@ els.compressBtn.addEventListener('click', compress);
 els.clearBtn.addEventListener('click',    clearAll);
 els.zipBtn.addEventListener('click',      downloadZip);
 
+// ── settings profiles ────────────────────────────────────────────────────────
+els.profileSelect.addEventListener('change', () => {
+  if (els.profileSelect.value === 'custom') { updateSettingsPill(); return; }
+  selectProfile(els.profileSelect.value);
+});
+document.querySelectorAll('input[name="format"]').forEach((r) => r.addEventListener('change', markCustomIfChanged));
+els.targetKB.addEventListener('input',   markCustomIfChanged);
+els.isBanner.addEventListener('change',  markCustomIfChanged);
+els.minWidth.addEventListener('input',   markCustomIfChanged);
+els.minHeight.addEventListener('input',  markCustomIfChanged);
+
 // Edit all: open the editor on the first editable image in apply-to-all mode.
 els.editAllBtn.addEventListener('click', () => {
   const first = state.queue.find((q) => isEditable(q.file));
@@ -1165,6 +1262,18 @@ document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   if (!els.editOverlay.hidden) closeEditor();
   else if (!els.overlay.hidden) closeOverlay();
+});
+
+// ── theme toggle ────────────────────────────────────────────────────────────
+// The initial [data-theme] (stored choice, or system preference as a
+// fallback) is already set by theme-init.js before this script ever runs -
+// this handler only needs to flip it and persist the explicit choice.
+els.themeToggle.addEventListener('click', () => {
+  const goingLight = document.documentElement.getAttribute('data-theme') !== 'light';
+  if (goingLight) document.documentElement.setAttribute('data-theme', 'light');
+  else document.documentElement.removeAttribute('data-theme');
+  els.themeToggle.setAttribute('aria-label', goingLight ? 'Switch to dark theme' : 'Switch to light theme');
+  try { localStorage.setItem('theme', goingLight ? 'light' : 'dark'); } catch (e) { /* storage unavailable */ }
 });
 
 // ── branding (env-driven server-side, applied client-side at runtime) ─────────
@@ -1201,11 +1310,25 @@ fetch('/api/config').then((r) => r.json()).then((c) => {
     $('#authUser').textContent = `Signed in as ${c.user.name || c.user.username}`;
     $('#authStatus').hidden = false;
   }
-  els.targetKB.value = c.defaultTargetKB;
   els.videoTargetMB.value = c.defaultVideoTargetMB;
   els.formatsHint.textContent =
     `JPG · PNG · WebP · GIF · AVIF · BMP · HEIC (max ${c.maxFileMB} MB) · ` +
     `MP4 · MOV · WebM · AVI, always converted to MP4 (max ${c.maxVideoMB} MB)`;
+
+  // Keep the Balanced preset in sync with the server-configured default
+  // (TARGET_KB env var) rather than a hardcoded 500 - a deployment that
+  // re-tunes its default shouldn't have the "Balanced" profile disagree with it.
+  const balanced = PRESETS.find((p) => p.id === 'balanced');
+  if (balanced) balanced.targetKB = c.defaultTargetKB;
+
+  PRESETS.forEach((p) => els.profileSelect.appendChild(Object.assign(document.createElement('option'), {
+    value: p.id, textContent: p.label,
+  })));
+  els.profileSelect.appendChild(Object.assign(document.createElement('option'), {
+    value: 'custom', textContent: 'Custom',
+  }));
+  const savedProfile = localStorage.getItem(PROFILE_KEY);
+  selectProfile(PRESETS.some((p) => p.id === savedProfile) ? savedProfile : PRESETS[0].id);
 
   const steps       = [5, 10, 20, 50, 100].filter((n) => n <= c.maxFiles);
   if (!steps.includes(c.maxFiles)) steps.push(c.maxFiles);

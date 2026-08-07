@@ -4,6 +4,10 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Image Resizer</title>
+  <!-- Blocking + external (CSP has no 'unsafe-inline'): sets [data-theme] on
+       <html> before first paint so a stored/system light preference never
+       flashes dark first. Must stay tiny - it runs before <body> exists. -->
+  <script src="theme-init.js"></script>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -14,15 +18,27 @@
           <h1 id="brandName">Image Resizer</h1>
           <p id="brandTagline" class="tagline">Compress images and videos to your size target - banner-safe, resolution-aware</p>
         </div>
-        <div id="authStatus" class="auth-status" hidden>
-          <span id="authUser"></span>
-          <a href="/auth/logout">Sign out</a>
+        <div class="topbar-actions">
+          <button type="button" id="themeToggle" class="theme-toggle" aria-label="Switch to light theme" title="Switch color theme">
+            <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <circle cx="12" cy="12" r="4"/>
+              <path d="M12 2v2.5M12 19.5V22M4.22 4.22l1.77 1.77M18 18l1.78 1.78M2 12h2.5M19.5 12H22M4.22 19.78L6 18M18 6l1.78-1.78"/>
+            </svg>
+            <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/>
+            </svg>
+          </button>
+          <div id="authStatus" class="auth-status" hidden>
+            <span id="authUser"></span>
+            <a href="/auth/logout">Sign out</a>
+          </div>
         </div>
       </div>
     </div>
   </header>
 
   <main class="wrap">
+  <div class="upload-col">
 
     <!-- Drop zone -->
     <section id="dropzone" class="dropzone" tabindex="0" aria-label="Upload images">
@@ -42,8 +58,10 @@
     <!-- Pre-compress queue list -->
     <div id="queueList" class="queue-list" hidden></div>
 
-    <!-- Options (collapsible) -->
-    <details id="optionsPanel" class="options-panel" open>
+  </div>
+
+  <!-- Options (collapsible) - its own full-width row, not squeezed into the rail -->
+  <details id="optionsPanel" class="options-panel" open>
       <summary class="options-summary">
         <span>Options</span>
         <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -51,6 +69,12 @@
         </svg>
       </summary>
       <div class="options">
+        <div class="opt opt-featured">
+          <label class="opt-label" for="profileSelect">Profile</label>
+          <select id="profileSelect"></select>
+          <small class="opt-help">Loads a starting point below. Change any setting to switch to Custom.</small>
+        </div>
+
         <div class="opt">
           <label class="opt-label" for="batchLimit">Max files per batch</label>
           <select id="batchLimit"></select>
@@ -72,12 +96,6 @@
             <input type="number" id="targetKB" min="10" step="10" value="500" />
           </div>
           <div class="opt">
-            <label class="opt-label checkbox">
-              <input type="checkbox" id="isBanner" /> Banner mode
-            </label>
-            <small class="opt-help">Protects full width - compresses quality before shrinking dimensions.</small>
-          </div>
-          <div class="opt">
             <span class="opt-label">Minimum resolution (px)</span>
             <div class="minres">
               <input type="number" id="minWidth" min="0" placeholder="width" />
@@ -86,6 +104,15 @@
             </div>
             <small class="opt-help">Won't go below this. Conflicts let you choose.</small>
           </div>
+          <details id="advancedOpts" class="advanced opt">
+            <summary class="advanced-summary">Advanced</summary>
+            <div class="opt">
+              <label class="opt-label checkbox">
+                <input type="checkbox" id="isBanner" /> Banner mode
+              </label>
+              <small class="opt-help">Protects full width - compresses quality before shrinking dimensions. Set automatically by the Banner / Ad profile.</small>
+            </div>
+          </details>
         </div>
 
         <div id="videoSettings" class="opt-group">
@@ -99,9 +126,14 @@
       </div>
     </details>
 
+  <div class="action-col">
+
     <!-- Action bar -->
     <div class="actionbar">
-      <span id="queueCount" class="queue-count"></span>
+      <div class="actionbar-info">
+        <span id="queueCount" class="queue-count"></span>
+        <span id="activeSettingsPill" class="settings-pill"></span>
+      </div>
       <div class="actions">
         <button type="button" id="editAllBtn" class="btn ghost" disabled>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon"><path d="M6 6h12v12H6z"/><path d="M3 9h3M3 15h3M18 9h3M18 15h3M9 3v3M15 3v3M9 18v3M15 18v3"/></svg>
@@ -130,6 +162,9 @@
 
     <div id="error" class="error" hidden></div>
 
+  </div>
+
+  <div class="results-pane">
     <!-- Results header -->
     <div id="resultsHeader" class="results-header" hidden>
       <span id="resultsTitle">Results</span>
@@ -138,6 +173,7 @@
 
     <!-- Results grid -->
     <div id="results" class="results-grid"></div>
+  </div>
 
   </main>
 

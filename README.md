@@ -35,7 +35,9 @@ The core logic for both lives in [`lib/compress.js`](lib/compress.js) (images) a
 - **Images in:** JPEG, PNG, WebP, GIF, AVIF, BMP, HEIC/HEIF
 - **Images out:** JPEG, WebP, or PNG, guaranteed to be at or under the target size (default 500 KB)
 - **Image controls:** banner mode (never shrinks width, only quality), minimum-resolution floor with a conflict UI when the floor and the target disagree
-- **Pre-compression editor:** crop, aspect presets (1:1 / 4:3 / 16:9 / original / custom), rotate, flip, zoom, and a focus point - applied to one image or across the whole batch. Only geometry is sent to the server; the original bytes still go through the quality pipeline. Not offered for GIF (a crop would flatten the animation) or HEIC/HEIF (browsers can't decode those onto a canvas)
+- **Pre-compression editor:** crop, aspect presets (1:1 / 4:3 / 16:9 / original / custom), rotate, flip, zoom, and a focus point - applied to one image or across the whole batch.
+  Only geometry is sent to the server; the original bytes still go through the quality pipeline.
+  Not offered for GIF (a crop would flatten the animation) or HEIC/HEIF (browsers can't decode those onto a canvas)
 - **Video in:** MP4, MOV, WebM, AVI
 - **Video out:** MP4 (H.264), best-effort target size (default 50 MB, typically within about 5%)
 - **Batch processing:** drop a mix of images and videos at once, download results individually or as a single ZIP

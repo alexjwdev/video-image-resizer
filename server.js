@@ -48,8 +48,13 @@ const DOWNLOAD_TTL_MS      = 15 * 60 * 1000;
 const BRAND = {
   name:      process.env.BRAND_NAME           || 'Image Resizer',
   tagline:   process.env.BRAND_TAGLINE        || 'Compress images and videos to your size target - banner-safe, resolution-aware',
-  accent:    process.env.BRAND_ACCENT_COLOR   || '#4f8cff',
-  highlight: process.env.BRAND_HIGHLIGHT_COLOR || process.env.BRAND_ACCENT_COLOR || '#4f8cff',
+  // Monochrome bone default (Dimension-style achromatic dark theme) - a
+  // deployment can still re-skin to a chromatic accent via BRAND_ACCENT_COLOR/
+  // HIGHLIGHT_COLOR. Kept light (not violet) so runtime overrides driving
+  // --accent/--highlight stay a neutral highlight, matching the CSS's own
+  // "violet is decoration-only, never a functional accent" rule.
+  accent:    process.env.BRAND_ACCENT_COLOR   || '#ededed',
+  highlight: process.env.BRAND_HIGHLIGHT_COLOR || process.env.BRAND_ACCENT_COLOR || '#ededed',
 };
 
 const VALID_FORMATS = new Set(['jpeg', 'webp', 'png']);
@@ -214,9 +219,18 @@ function buildResult(f, r, opts) {
   return { ...base, result: toPayload(r.result) };
 }
 
+// Output is always MP4 regardless of source container, so the downloaded
+// filename must carry that extension too - otherwise Content-Disposition
+// hands back e.g. "clip.mkv" for a file that is actually a valid MP4,
+// which then reads as broken/unrecognized to the OS and media players.
+function mp4Name(originalName) {
+  const stem = originalName.replace(/\.[^.]+$/, '');
+  return (stem || 'video') + '.mp4';
+}
+
 function buildVideoResult(f, r, opts) {
   const id = downloadRegistry.putBuffer(r.result.buffer, {
-    name: f.originalname,
+    name: mp4Name(f.originalname),
     mime: VIDEO_MIME[r.format],
     ext: '.mp4',
   });
