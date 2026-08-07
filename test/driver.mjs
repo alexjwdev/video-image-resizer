@@ -192,7 +192,12 @@ async function e2e() {
     await page.goto(base, { waitUntil: 'networkidle' });
 
     // ── Scenario 0: baseline compress (banner, isBanner) <= 500 KB ──────────
+    // isBanner now lives inside the collapsed "Advanced" <details> (folded
+    // out of the main options in favor of the settings-profile picker) -
+    // open it first, same as a user would, since a hidden checkbox can't be
+    // checked.
     await page.setInputFiles('#fileInput', path.join(SAMPLES, 'banner.jpg'));
+    await page.evaluate(() => { document.querySelector('#advancedOpts').open = true; });
     await page.check('#isBanner');
     await page.click('#compressBtn');
     await page.waitForFunction(() => {
