@@ -1,18 +1,114 @@
 'use strict';
 
 const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+
+// ── custom dropdown ──────────────────────────────────────────────────────────
+// Minimal listbox that stands in for a native <select> so it can be fully
+// restyled (native <option> popups can't be), while keeping the same
+// `.value` get/set + `.addEventListener('change', fn)` shape the rest of the
+// app already uses - swapping this in needed no changes at any call site.
+function createCustomSelect(root) {
+  root.classList.add('custom-select');
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'custom-select-btn';
+  btn.setAttribute('aria-haspopup', 'listbox');
+  btn.setAttribute('aria-expanded', 'false');
+  // The interactive element needs the label, not the (non-interactive) root.
+  const labelledBy = root.getAttribute('aria-labelledby');
+  if (labelledBy) { btn.setAttribute('aria-labelledby', labelledBy); root.removeAttribute('aria-labelledby'); }
+  const label = document.createElement('span');
+  label.className = 'custom-select-label';
+  btn.innerHTML = '<svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 9l-7 7-7-7"/></svg>';
+  btn.prepend(label);
+
+  const menu = document.createElement('ul');
+  menu.className = 'custom-select-menu';
+  menu.setAttribute('role', 'listbox');
+  menu.hidden = true;
+  root.append(btn, menu);
+
+  let value = '';
+  let options = [];
+  const listeners = [];
+
+  function renderOptions() {
+    menu.innerHTML = '';
+    options.forEach((opt) => {
+      const li = document.createElement('li');
+      li.setAttribute('role', 'option');
+      li.dataset.value = opt.value;
+      li.textContent = opt.label;
+      li.tabIndex = -1;
+      const selected = opt.value === value;
+      li.setAttribute('aria-selected', String(selected));
+      li.classList.toggle('active', selected);
+      li.addEventListener('click', () => { setValue(opt.value); close(); btn.focus(); });
+      menu.appendChild(li);
+    });
+  }
+  function isOpen() { return !menu.hidden; }
+  function open() {
+    menu.hidden = false;
+    btn.setAttribute('aria-expanded', 'true');
+    (menu.querySelector('[aria-selected="true"]') || menu.firstElementChild)?.focus();
+  }
+  function close() { menu.hidden = true; btn.setAttribute('aria-expanded', 'false'); }
+  function setValue(v, { silent = false } = {}) {
+    value = v;
+    const opt = options.find((o) => o.value === v);
+    label.textContent = opt ? opt.label : '';
+    renderOptions();
+    if (!silent) listeners.forEach((fn) => fn());
+  }
+
+  btn.addEventListener('click', () => (isOpen() ? close() : open()));
+  btn.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
+    else if (e.key === 'Escape') close();
+  });
+  menu.addEventListener('keydown', (e) => {
+    const items = $$('li', menu);
+    const i = items.indexOf(document.activeElement);
+    if (e.key === 'ArrowDown')      { e.preventDefault(); (items[i + 1] || items[0]).focus(); }
+    else if (e.key === 'ArrowUp')   { e.preventDefault(); (items[i - 1] || items[items.length - 1]).focus(); }
+    else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); document.activeElement.click(); }
+    else if (e.key === 'Escape')    { close(); btn.focus(); }
+    else if (e.key === 'Tab')       close();
+  });
+  document.addEventListener('click', (e) => { if (!root.contains(e.target)) close(); });
+
+  return {
+    get value() { return value; },
+    set value(v) { setValue(v, { silent: true }); },
+    setOptions(opts) { options = opts; renderOptions(); },
+    addEventListener(type, fn) { if (type === 'change') listeners.push(fn); },
+  };
+}
 
 // ── constants ─────────────────────────────────────────────────────────────────
-const CONCURRENCY = 5;
+// Fixed ceiling on how many files can sit in the queue at once - independent
+// of the "Parallel conversions" setting below, which controls how many of
+// them compress at the same time, not how many can be queued.
+const MAX_QUEUE = 50;
+const CONCURRENCY_KEY = 'resizer.concurrency';
+const DEFAULT_CONCURRENCY = 5;
 
 // Curated starting points so first-time users get sane settings without
 // having to know what to change - selecting one fills the fields below;
 // hand-editing any of them afterward switches the selector to Custom.
 const PRESETS = [
-  { id: 'balanced', label: 'Balanced',     format: 'jpeg', targetKB: 500,  isBanner: false, minWidth: 0, minHeight: 0 },
-  { id: 'small',    label: 'Small File',   format: 'jpeg', targetKB: 150,  isBanner: false, minWidth: 0, minHeight: 0 },
-  { id: 'banner',   label: 'Banner / Ad',  format: 'jpeg', targetKB: 800,  isBanner: true,  minWidth: 0, minHeight: 0 },
-  { id: 'quality',  label: 'High Quality', format: 'webp', targetKB: 1200, isBanner: false, minWidth: 0, minHeight: 0 },
+  { id: 'balanced', label: 'Balanced',     format: 'jpeg', targetKB: 500,  isBanner: false, minWidth: 0, minHeight: 0, maxWidth: 1280,
+    description: 'Good default for general web use - photos, posts, everyday sharing.' },
+  { id: 'small',    label: 'Small File',   format: 'jpeg', targetKB: 150,  isBanner: false, minWidth: 0, minHeight: 0, maxWidth: 1080,
+    description: 'Smaller downloads when file size matters more than resolution.' },
+  { id: 'tiny',     label: 'Tiny',         format: 'jpeg', targetKB: 100,  isBanner: false, minWidth: 0, minHeight: 0, maxWidth: 720,
+    description: 'Thumbnails and previews - smallest files, lowest resolution ceiling.' },
+  { id: 'banner',   label: 'Banner / Ad',  format: 'jpeg', targetKB: 800,  isBanner: true,  minWidth: 0, minHeight: 0, maxWidth: 1920,
+    description: 'Protects width for ad slots and headers - trades quality before shrinking.' },
+  { id: 'quality',  label: 'High Quality', format: 'webp', targetKB: 1200, isBanner: false, minWidth: 0, minHeight: 0, maxWidth: 1920,
+    description: 'Higher target size and resolution ceiling for hero images or print.' },
 ];
 const PROFILE_KEY = 'resizer.profile';
 
@@ -22,7 +118,7 @@ const state = {
   queue:     [],   // {id, file, previewUrl, status}
   downloads: [],   // {name, blob} — for ZIP
 };
-let config = { defaultTargetKB: 500, maxFileMB: 25, maxFiles: 100, defaultVideoTargetMB: 50, maxVideoMB: 500 };
+let config = { defaultTargetKB: 500, maxFileMB: 25, defaultVideoTargetMB: 50, maxVideoMB: 500 };
 
 // stores per-card data for overlay; keyed by card element
 const cardData = new WeakMap();
@@ -50,8 +146,10 @@ const els = {
   resultsTitle:  $('#resultsTitle'),
   resultsSummary:$('#resultsSummary'),
   cardTpl:       $('#cardTpl'),
-  batchLimit:    $('#batchLimit'),
+  concurrency:      $('#concurrency'),
+  concurrencyValue: $('#concurrencyValue'),
   targetKB:      $('#targetKB'),
+  maxWidth:      $('#maxWidth'),
   videoTargetMB: $('#videoTargetMB'),
   isBanner:      $('#isBanner'),
   minWidth:      $('#minWidth'),
@@ -63,8 +161,11 @@ const els = {
   editAllBtn:    $('#editAllBtn'),
   editOverlay:   $('#editOverlay'),
   themeToggle:   $('#themeToggle'),
-  profileSelect: $('#profileSelect'),
+  profileSelect: createCustomSelect($('#profileSelect')),
   activeSettingsPill: $('#activeSettingsPill'),
+  profileDesc:   $('#profileDesc'),
+  profileSpecs:  $('#profileSpecs'),
+  formatChips:   $('#formatChips'),
 };
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -96,29 +197,55 @@ function showError(msg) {
   els.error.hidden      = !msg;
 }
 
-function batchLimit() {
-  return parseInt(els.batchLimit.value, 10) || config.maxFiles;
+function concurrency() {
+  return parseInt(els.concurrency.value, 10) || DEFAULT_CONCURRENCY;
+}
+
+// ── output format (custom segmented control, standing in for radio inputs) ──
+function currentFormat() {
+  return $('.format-chip.active', els.formatChips)?.dataset.format || 'jpeg';
+}
+
+// Mirrors createCustomSelect's setValue(..., {silent}) shape: programmatic
+// preset application never fires markCustomIfChanged, only a real click does.
+function setFormat(fmt, { silent = false } = {}) {
+  $$('.format-chip', els.formatChips).forEach((b) => {
+    const active = b.dataset.format === fmt;
+    b.classList.toggle('active', active);
+    b.setAttribute('aria-checked', String(active));
+  });
+  if (!silent) markCustomIfChanged();
 }
 
 // ── settings profiles ────────────────────────────────────────────────────────
-function currentFormat() {
-  return document.querySelector('input[name="format"]:checked').value;
-}
-
 function fieldsMatchPreset(preset) {
   return currentFormat() === preset.format &&
     (parseInt(els.targetKB.value, 10)  || 0) === preset.targetKB &&
     els.isBanner.checked                     === preset.isBanner &&
     (parseInt(els.minWidth.value, 10)  || 0) === (preset.minWidth  || 0) &&
-    (parseInt(els.minHeight.value, 10) || 0) === (preset.minHeight || 0);
+    (parseInt(els.minHeight.value, 10) || 0) === (preset.minHeight || 0) &&
+    (parseInt(els.maxWidth.value, 10)  || 0) === (preset.maxWidth  || 0);
 }
 
-function updateSettingsPill() {
-  const preset = PRESETS.find((p) => p.id === els.profileSelect.value);
-  const label  = preset ? preset.label : 'Custom';
+// Updates both the compact action-bar pill and the fuller profile-info panel
+// below the dropdown - always called together so neither can drift stale.
+function refreshSettingsSummary() {
+  const preset   = PRESETS.find((p) => p.id === els.profileSelect.value);
+  const label    = preset ? preset.label : 'Custom';
   const targetKB = parseInt(els.targetKB.value, 10) || config.defaultTargetKB;
+  const maxWidth = parseInt(els.maxWidth.value, 10) || 0;
+  const isBanner = els.isBanner.checked;
+
   els.activeSettingsPill.textContent =
-    `${label} · ${targetKB}KB · ${currentFormat().toUpperCase()}${els.isBanner.checked ? ' · Banner' : ''}`;
+    `${label} · ${targetKB}KB · ${currentFormat().toUpperCase()}${isBanner ? ' · Banner' : ''}`;
+
+  els.profileDesc.textContent = preset
+    ? preset.description
+    : 'Custom settings - not tied to a saved profile.';
+  const specs = [currentFormat().toUpperCase(), `${targetKB}KB target`];
+  if (maxWidth) specs.push(`max ${maxWidth}px wide`);
+  if (isBanner) specs.push('Banner mode');
+  els.profileSpecs.innerHTML = specs.map((s) => `<span class="spec-chip">${s}</span>`).join('');
 }
 
 // Applying a preset writes values via .value/.checked, which never fire
@@ -127,13 +254,13 @@ function updateSettingsPill() {
 function applyPreset(id) {
   const preset = PRESETS.find((p) => p.id === id);
   if (!preset) return;
-  const radio = document.querySelector(`input[name="format"][value="${preset.format}"]`);
-  if (radio) radio.checked = true;
+  setFormat(preset.format, { silent: true });
   els.targetKB.value   = preset.targetKB;
+  els.maxWidth.value   = preset.maxWidth  || '';
   els.isBanner.checked = preset.isBanner;
   els.minWidth.value   = preset.minWidth  || '';
   els.minHeight.value  = preset.minHeight || '';
-  updateSettingsPill();
+  refreshSettingsSummary();
 }
 
 function selectProfile(id) {
@@ -147,7 +274,7 @@ function selectProfile(id) {
 function markCustomIfChanged() {
   const active = PRESETS.find((p) => p.id === els.profileSelect.value);
   if (active && !fieldsMatchPreset(active)) els.profileSelect.value = 'custom';
-  updateSettingsPill();
+  refreshSettingsSummary();
 }
 
 // PERF-10: single Uint8Array.from call — no char-by-char loop
@@ -171,10 +298,9 @@ function outName(name, fmt) {
 // ── queue ─────────────────────────────────────────────────────────────────────
 function addFiles(fileList) {
   showError('');
-  const limit = batchLimit();
   for (const f of Array.from(fileList)) {
-    if (state.queue.length >= limit) {
-      showError(`Limit is ${limit} files - adjust "Max files" in options to add more.`);
+    if (state.queue.length >= MAX_QUEUE) {
+      showError(`Queue is full - max ${MAX_QUEUE} files. Clear or compress some before adding more.`);
       break;
     }
     state.queue.push({ id: ++queueSeq, file: f, previewUrl: URL.createObjectURL(f), status: 'pending', edit: null });
@@ -397,7 +523,7 @@ async function compress() {
   const items         = [...state.queue];
   const total         = items.length;
   const hasVideo      = items.some((q) => q.file.type.startsWith('video/'));
-  const format        = document.querySelector('input[name="format"]:checked').value;
+  const format        = currentFormat();
   const targetKB      = parseInt(els.targetKB.value, 10) || config.defaultTargetKB;
   const videoTargetMB = parseInt(els.videoTargetMB.value, 10) || config.defaultVideoTargetMB;
 
@@ -417,6 +543,7 @@ async function compress() {
     isBanner:  els.isBanner.checked  ? 'true' : 'false',
     minWidth:  String(parseInt(els.minWidth.value,  10) || 0),
     minHeight: String(parseInt(els.minHeight.value, 10) || 0),
+    maxWidth:  String(parseInt(els.maxWidth.value,  10) || 0),
     // Ignored server-side for images, same pattern as `format` being sent
     // but ignored for video.
     videoTargetMB: String(videoTargetMB),
@@ -456,8 +583,8 @@ async function compress() {
     }
   }
 
-  // Launch up to CONCURRENCY workers
-  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, items.length) }, worker));
+  // Launch up to `concurrency()` workers
+  await Promise.all(Array.from({ length: Math.min(concurrency(), items.length) }, worker));
 
   hideProgress();
 
@@ -490,6 +617,7 @@ function renderCard(r, queueItem) {
   const node       = els.cardTpl.content.firstElementChild.cloneNode(true);
   const thumb      = $('.card-thumb', node);
   const video      = $('.card-video', node);
+  const playIcon   = $('.video-play-icon', node);
   const badge      = $('.badge',      node);
   const fname      = $('.fname',      node);
   const sizesText  = $('.card-sizes-text', node);
@@ -506,8 +634,9 @@ function renderCard(r, queueItem) {
   // Determine primary payload for thumbnail + initial download
   const payload  = r.conflict ? r.keepResolution : r.result;
   if (isVideo) {
-    thumb.hidden = true;
-    video.hidden = false;
+    thumb.hidden    = true;
+    video.hidden    = false;
+    playIcon.hidden = false;
     video.src    = payload.downloadUrl;
     if (payload.posterDataUrl) video.poster = payload.posterDataUrl;
   } else {
@@ -1240,14 +1369,21 @@ els.zipBtn.addEventListener('click',      downloadZip);
 
 // ── settings profiles ────────────────────────────────────────────────────────
 els.profileSelect.addEventListener('change', () => {
-  if (els.profileSelect.value === 'custom') { updateSettingsPill(); return; }
+  if (els.profileSelect.value === 'custom') { refreshSettingsSummary(); return; }
   selectProfile(els.profileSelect.value);
 });
-document.querySelectorAll('input[name="format"]').forEach((r) => r.addEventListener('change', markCustomIfChanged));
+$$('.format-chip', els.formatChips).forEach((b) => b.addEventListener('click', () => setFormat(b.dataset.format)));
 els.targetKB.addEventListener('input',   markCustomIfChanged);
+els.maxWidth.addEventListener('input',   markCustomIfChanged);
 els.isBanner.addEventListener('change',  markCustomIfChanged);
 els.minWidth.addEventListener('input',   markCustomIfChanged);
 els.minHeight.addEventListener('input',  markCustomIfChanged);
+
+// ── parallel-conversion count (not a preset field - a performance knob) ──────
+els.concurrency.addEventListener('input', () => {
+  els.concurrencyValue.textContent = els.concurrency.value;
+  localStorage.setItem(CONCURRENCY_KEY, els.concurrency.value);
+});
 
 // Edit all: open the editor on the first editable image in apply-to-all mode.
 els.editAllBtn.addEventListener('click', () => {
@@ -1321,21 +1457,15 @@ fetch('/api/config').then((r) => r.json()).then((c) => {
   const balanced = PRESETS.find((p) => p.id === 'balanced');
   if (balanced) balanced.targetKB = c.defaultTargetKB;
 
-  PRESETS.forEach((p) => els.profileSelect.appendChild(Object.assign(document.createElement('option'), {
-    value: p.id, textContent: p.label,
-  })));
-  els.profileSelect.appendChild(Object.assign(document.createElement('option'), {
-    value: 'custom', textContent: 'Custom',
-  }));
+  els.profileSelect.setOptions([
+    ...PRESETS.map((p) => ({ value: p.id, label: p.label })),
+    { value: 'custom', label: 'Custom' },
+  ]);
   const savedProfile = localStorage.getItem(PROFILE_KEY);
   selectProfile(PRESETS.some((p) => p.id === savedProfile) ? savedProfile : PRESETS[0].id);
 
-  const steps       = [5, 10, 20, 50, 100].filter((n) => n <= c.maxFiles);
-  if (!steps.includes(c.maxFiles)) steps.push(c.maxFiles);
-  const defaultStep = steps.reduce((p, n) => n <= 20 ? n : p);
-  steps.forEach((n) => {
-    els.batchLimit.appendChild(Object.assign(document.createElement('option'), {
-      value: n, textContent: n + (n === c.maxFiles ? ' (max)' : ''), selected: n === defaultStep,
-    }));
-  });
+  const savedConcurrency = parseInt(localStorage.getItem(CONCURRENCY_KEY), 10);
+  const initialConcurrency = (savedConcurrency >= 1 && savedConcurrency <= 20) ? savedConcurrency : DEFAULT_CONCURRENCY;
+  els.concurrency.value = initialConcurrency;
+  els.concurrencyValue.textContent = initialConcurrency;
 }).catch(() => {});

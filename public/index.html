@@ -70,30 +70,41 @@
       </summary>
       <div class="options">
         <div class="opt opt-featured">
-          <label class="opt-label" for="profileSelect">Profile</label>
-          <select id="profileSelect"></select>
-          <small class="opt-help">Loads a starting point below. Change any setting to switch to Custom.</small>
+          <label class="opt-label" id="profileSelectLabelFor">Profile</label>
+          <div id="profileSelect" class="custom-select" aria-labelledby="profileSelectLabelFor"></div>
+          <div class="profile-info">
+            <p class="profile-desc" id="profileDesc"></p>
+            <div class="profile-specs" id="profileSpecs"></div>
+          </div>
         </div>
 
         <div class="opt">
-          <label class="opt-label" for="batchLimit">Max files per batch</label>
-          <select id="batchLimit"></select>
-          <small class="opt-help">Larger batches use more RAM and take longer.</small>
+          <label class="opt-label" for="concurrency">Parallel conversions</label>
+          <div class="range-row">
+            <input type="range" id="concurrency" min="1" max="20" step="1" value="5" />
+            <output id="concurrencyValue" for="concurrency">5</output>
+          </div>
+          <small class="opt-help">How many files compress at once. Higher is faster but uses more CPU/RAM. Queue holds up to 50 files.</small>
         </div>
 
         <div id="imageSettings" class="opt-group">
           <h3 class="opt-group-title">Image settings</h3>
           <div class="opt">
-            <span class="opt-label">Output format</span>
-            <div class="radios">
-              <label><input type="radio" name="format" value="jpeg" checked /> JPEG</label>
-              <label><input type="radio" name="format" value="webp" /> WebP</label>
-              <label><input type="radio" name="format" value="png" /> PNG</label>
+            <span class="opt-label" id="formatLabelFor">Output format</span>
+            <div class="format-chips" id="formatChips" role="radiogroup" aria-labelledby="formatLabelFor">
+              <button type="button" class="format-chip active" data-format="jpeg" role="radio" aria-checked="true">JPEG</button>
+              <button type="button" class="format-chip" data-format="webp" role="radio" aria-checked="false">WebP</button>
+              <button type="button" class="format-chip" data-format="png" role="radio" aria-checked="false">PNG</button>
             </div>
           </div>
           <div class="opt">
             <label class="opt-label" for="targetKB">Target size (KB)</label>
             <input type="number" id="targetKB" min="10" step="10" value="500" />
+          </div>
+          <div class="opt">
+            <label class="opt-label" for="maxWidth">Maximum width (px)</label>
+            <input type="number" id="maxWidth" min="0" placeholder="no limit" />
+            <small class="opt-help">Never output wider than this, even if the target size would allow it.</small>
           </div>
           <div class="opt">
             <span class="opt-label">Minimum resolution (px)</span>
@@ -182,7 +193,15 @@
     <article class="card">
       <div class="card-thumb-wrap">
         <img class="card-thumb" alt="" />
-        <video class="card-video" controls muted playsinline preload="none" hidden></video>
+        <!-- No `controls` - this is a static preview like the image thumb;
+             native video controls silently swallow clicks so "open compare/
+             download overlay" never fired. Full playback controls live on
+             .overlay-video instead. -->
+        <video class="card-video" muted playsinline preload="none" hidden></video>
+        <svg class="video-play-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true" hidden>
+          <circle cx="12" cy="12" r="11" fill="rgba(10,10,10,0.55)"/>
+          <path d="M9.5 7.5v9l8-4.5-8-4.5z" fill="#fff"/>
+        </svg>
         <span class="badge"></span>
       </div>
       <div class="card-body">

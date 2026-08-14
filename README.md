@@ -86,6 +86,47 @@ freely with no volume to manage.
 Video encoding is CPU-heavy - if this shares a host with other services, set resource limits
 (see the commented-out `deploy.resources` block in `docker-compose.yml`, or `docker run --cpus`/`--memory`).
 
+### Or build a 1-click portable app (Windows or macOS)
+
+If you want to hand someone a folder they can double-click - no Node install, no command line - build a portable bundle:
+
+```bash
+npm install
+npm run build:portable          # add -- --zip to also produce a .zip
+```
+
+On Windows this writes `dist/ImageResizer-portable/`:
+
+```
+Image Resizer.cmd      double-click to start   (macOS: "Image Resizer.command")
+README.txt
+node.exe               the bundled Node runtime  (macOS: "node")
+app/                   server.js, lib, public, and production node_modules
+```
+
+Double-clicking the launcher starts a local server on a free `127.0.0.1` port and opens the app in the default browser; closing the small window stops it.
+Nothing is installed and nothing leaves the machine.
+Copy the whole folder to a USB stick or another machine of the same OS and it just runs.
+
+How it is built (see [`scripts/build-portable.mjs`](scripts/build-portable.mjs)): it bundles the Node runtime the build was run with and **copies** the already-working `node_modules`, so the native `sharp` and bundled `ffmpeg` binaries are the exact ones proven on the build machine - no ABI rebuild and no network install.
+Dev-only packages are pruned.
+The bundle is around 250 MB, most of which is `ffmpeg` and `libvips` - drop `@ffmpeg-installer`/`@ffprobe-installer` from `dependencies` and rebuild if you want an images-only build about 80 MB smaller.
+
+**Building for another OS (cross-build).** Native binaries are OS- and CPU-specific, so a bundle only runs on the platform it targets.
+By default the script builds for the current machine; pass `--target` to build for another:
+
+```bash
+npm run build:portable -- --target=darwin-arm64   # Apple Silicon macOS (M1-M4)
+npm run build:portable -- --target=darwin-x64     # Intel macOS
+```
+
+A cross-build downloads the target's Node from nodejs.org and resolves target-native `node_modules` via `npm ci --os --cpu`, then emits the matching launcher (`.cmd` / `.command` / `.sh`) and a ready-to-ship `dist/ImageResizer-portable-<target>.zip` (POSIX paths and executable bits preserved).
+Building **on** the target OS is still the most robust option when you have access to it.
+
+**macOS first run.** A cross-built bundle is unsigned, so macOS quarantines it after download.
+The bundle's `README.txt` carries the one-time command to clear it (`xattr -dr com.apple.quarantine . && chmod +x node "Image Resizer.command"`); after that, double-click `Image Resizer.command` any time.
+Signing it away entirely needs an Apple Developer certificate and a Mac.
+
 ## Configuration
 
 All configuration is via environment variables, loaded from a `.env` file in the project root if one exists.
@@ -100,10 +141,30 @@ Nothing here is required; every variable has a sane default and the app is fully
 | `TARGET_KB` | `500` | Default image target size in KB (overridable per job in the UI) |
 | `MAX_FILE_MB` | `25` | Max size of a single uploaded image, in MB |
 | `MAX_FILES` | `20` | Max number of files per batch upload |
+| `ENCODE_PROFILE` | `max` | JPEG/WebP encoder tuning: `max`, `balanced`, or `fast`. See below |
 | `MAX_CONCURRENT` | `5` | Max number of `/api/compress` requests processed at once (excess requests get a 503) |
 | `MAX_VIDEO_MB` | `500` | Max size of a single uploaded video, in MB |
 | `VIDEO_TARGET_MB` | `50` | Default video target size in MB |
 | `MAX_VIDEO_CONCURRENT` | `1` | Max number of videos encoded at once (video encodes are CPU-heavy, so this is intentionally low) |
+
+#### Encoder profiles
+
+The target-size search runs a lot of encodes, so the per-encode cost dominates total runtime.
+`ENCODE_PROFILE` picks that trade-off.
+Measured on `test/samples/photo.jpg` (2400x1600, 2.9MB) to a 500KB JPEG target:
+
+| Profile | Encoder | CPU per image | Result |
+| --- | --- | --- | --- |
+| `max` (default) | mozjpeg, 4:4:4 chroma | ~12.7s | 1734px, 482KB, q34 |
+| `balanced` | mozjpeg, 4:2:0 chroma | ~7.9s | 2040px, 486KB, q40 |
+| `fast` | libjpeg-turbo, 4:2:0 chroma | ~1.3s | 1734px, 491KB, q45 |
+
+`max` is the default so nothing changes for anyone self-hosting or running the portable build.
+It is the right choice when you own the machine and care most about colour fidelity on flat-colour graphics, where 4:2:0 chroma subsampling is visible.
+
+`balanced` is worth knowing about: mozjpeg's trellis quantization produces smaller files, which lets the resolution ladder stop at a *wider* width, so it often returns a higher-resolution image than `max` for ~60% of the CPU.
+
+`fast` is roughly 10x cheaper per encode and is intended for a deployment serving many people at once, where sustained throughput matters more than chroma resolution.
 
 ### Optional feature 1: Microsoft Entra ID (Azure AD) SSO
 

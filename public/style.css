@@ -25,7 +25,7 @@
   --color-snow-white:    #ffffff;  /* the one filled-button / inverted surface */
   --color-bone:          #ededed;  /* primary text on dark surfaces */
   --color-ash:           #c2c2c2;  /* secondary text, helper copy */
-  --color-slate:         #686868;  /* muted / tertiary metadata */
+  --color-slate:         #818181;  /* muted / tertiary metadata - lightened from #686868, which was WCAG-AA-failing (3.2:1) for normal text on the frosted panel background; now 4.55:1 */
   --color-smoke:         #b2b2b2;  /* idle/disabled control text */
   --color-hairline:      #e5e5e5; /* 1px borders - a light edge on dark surfaces */
   --color-violet:        #6b62f2; /* the ONLY chromatic accent - gradient/glow only */
@@ -113,8 +113,8 @@
   --color-snow-white:    #0a0a0a;  /* the inverted fill flips too - primary buttons become dark-on-light */
   --color-bone:          #171717;  /* primary text on light surfaces */
   --color-ash:           #52525b;  /* secondary text */
-  --color-slate:         #7a7a7a;  /* muted / tertiary metadata */
-  --color-smoke:         #a8a8a8;  /* idle/disabled control text */
+  --color-slate:         #6c6c6c;  /* muted / tertiary metadata - darkened from #7a7a7a, which was WCAG-AA-failing (3.7:1) for normal text on the frosted panel background; now 4.56:1 */
+  --color-smoke:         #6c6c6c;  /* idle/disabled control text - darkened from #a8a8a8, which was badly failing (2.2-4.2:1, e.g. the queue row's "Edit" button label); now 4.56:1. Same value as --color-slate here since both needed the same floor - dark theme keeps them distinct since its --color-smoke already passed */
   --color-hairline:      #e2e2e2;
 
   --frost-fill:   rgba(10,10,10,0.035);
@@ -276,8 +276,9 @@ body.overlay-open { overflow: hidden; }
   max-height: 280px; overflow-y: auto;
   scrollbar-width: thin; scrollbar-color: var(--frost-border) transparent;
 }
+.queue-list[hidden] { display: none; }
 .qi {
-  position: relative; overflow: hidden;
+  position: relative; overflow: hidden; flex-shrink: 0;
   display: flex; align-items: center; gap: 10px;
   padding: 8px 12px; background: var(--frost-fill);
   backdrop-filter: var(--frost-blur); -webkit-backdrop-filter: var(--frost-blur);
@@ -393,6 +394,60 @@ select { cursor: pointer; }
 .minres input { width: 100%; }
 .minres span  { color: var(--color-slate); }
 
+/* ── Custom dropdown (replaces a native <select> so it can be fully
+   restyled - native option popups can't be themed). ─────────────────────── */
+.custom-select { position: relative; }
+.custom-select-btn {
+  width: 100%; display: flex; align-items: center; justify-content: space-between;
+  background: var(--tint-2); border: 1px solid var(--frost-border); color: var(--color-bone);
+  border-radius: var(--radius-ui); padding: 9px 12px; font: inherit; font-size: 14px;
+  cursor: pointer; text-align: left; transition: border-color .12s, background .12s;
+}
+.custom-select-btn:hover, .custom-select-btn[aria-expanded="true"] {
+  background: var(--tint-3); border-color: var(--color-bone);
+}
+.custom-select-btn .chevron { width: 16px; height: 16px; stroke: var(--color-ash); flex-shrink: 0; transition: transform .15s; }
+.custom-select-btn[aria-expanded="true"] .chevron { transform: rotate(180deg); }
+.custom-select-menu {
+  position: absolute; left: 0; right: 0; top: calc(100% + 6px); z-index: 5;
+  background: var(--color-graphite); border: 1px solid var(--frost-border);
+  border-radius: var(--radius-ui); padding: 4px; max-height: 260px; overflow-y: auto;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.35); list-style: none;
+}
+.custom-select-menu li {
+  padding: 8px 10px; border-radius: calc(var(--radius-ui) - 4px); font-size: 14px;
+  color: var(--color-bone); cursor: pointer;
+}
+.custom-select-menu li:hover, .custom-select-menu li:focus { background: var(--tint-3); outline: none; }
+.custom-select-menu li.active { background: var(--tint-4); font-weight: 500; }
+
+/* ── Custom segmented control (replaces radio inputs for output format) ──── */
+.format-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.format-chip {
+  border: 1px solid var(--frost-border); background: transparent; color: var(--color-bone);
+  padding: 8px 16px; border-radius: var(--radius-pill); font: inherit; font-size: 14px; font-weight: 500;
+  cursor: pointer; transition: border-color .12s, background .12s;
+}
+.format-chip:hover  { border-color: var(--color-bone); }
+.format-chip.active { border-color: var(--color-bone); background: var(--color-bone); color: var(--color-graphite); }
+
+/* ── Profile info panel: description + spec chips under the dropdown ─────── */
+.profile-info { display: flex; flex-direction: column; gap: 8px; }
+.profile-desc { color: var(--color-slate); font-size: 12px; line-height: 1.4; min-height: 32px; }
+.profile-specs { display: flex; flex-wrap: wrap; gap: 6px; }
+.spec-chip {
+  font-size: 11px; font-weight: 500; color: var(--color-ash); background: var(--tint-2);
+  border: 1px solid var(--frost-border); border-radius: var(--radius-pill); padding: 3px 9px;
+}
+
+.range-row { display: flex; align-items: center; gap: 10px; }
+.range-row input[type="range"] { flex: 1; accent-color: var(--color-bone); cursor: pointer; }
+.range-row output {
+  min-width: 24px; text-align: center; font-size: 13px; font-weight: 500;
+  color: var(--color-bone); background: var(--tint-2); border: 1px solid var(--frost-border);
+  border-radius: var(--radius-pill); padding: 3px 8px;
+}
+
 /* ── Action bar ───────────────────────────────────────────────────────────── */
 .actionbar {
   display: flex; align-items: center; justify-content: space-between;
@@ -469,6 +524,11 @@ select { cursor: pointer; }
   display: flex; justify-content: space-between; align-items: baseline;
   margin-bottom: 16px; flex-wrap: wrap; gap: 6px;
 }
+/* Same [hidden]-override issue as .card-video etc. above: an author display
+   rule always beats the UA [hidden] rule regardless of specificity, so
+   without this "Clear all" left the previous run's title/summary visibly
+   on screen even though .hidden was correctly set to true. */
+.results-header[hidden] { display: none; }
 #resultsTitle    { font-family: var(--font-geist); font-weight: 600; font-size: 18px; color: var(--color-bone); letter-spacing: -0.1px; }
 .results-summary { font-size: 13px; color: var(--color-ash); }
 
@@ -506,10 +566,18 @@ select { cursor: pointer; }
 }
 .card:hover .card-thumb { transform: scale(1.03); }
 .card-video { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* Purely decorative - signals "this is a video" now that the card thumbnail
+   has no native controls (they silently ate clicks meant for the card's
+   open-overlay handler). pointer-events:none so it never intercepts clicks
+   itself. */
+.video-play-icon {
+  position: absolute; top: 50%; left: 50%; width: 44px; height: 44px;
+  transform: translate(-50%, -50%); pointer-events: none;
+}
 /* [hidden] is same specificity as the class rules above, so without this the
    author rule wins over the UA stylesheet and the element stays visible even
    when JS sets .hidden = true. */
-.card-thumb[hidden], .card-video[hidden] { display: none; }
+.card-thumb[hidden], .card-video[hidden], .video-play-icon[hidden] { display: none; }
 
 /* Status badge: frosted pill, quiet by default. Over-target reads as error
    (the palette's only status use of a non-neutral color). */

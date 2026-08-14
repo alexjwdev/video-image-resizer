@@ -68,6 +68,10 @@ async function smoke() {
     { file: 'banner.jpg', format: 'jpeg', opts: { isBanner: true } },
     { file: 'graphic.png', format: 'png', opts: {} },
     { file: 'graphic.png', format: 'webp', opts: {} },
+    // maxWidth ceiling: generous target but capped resolution - width must not exceed the cap
+    { file: 'photo.jpg', format: 'jpeg', opts: { maxWidth: 800 }, check: (r) => r.result.width <= 800 },
+    // maxWidth wins over isBanner's "protect full width" - capped, not full-width
+    { file: 'banner.jpg', format: 'jpeg', opts: { isBanner: true, maxWidth: 1000 }, check: (r) => r.result.width <= 1000 },
     // conflict: protected banner width + a tiny target it cannot meet at full width
     { file: 'banner.jpg', format: 'jpeg', opts: { isBanner: true, targetBytes: 2 * 1024 }, expectConflict: true },
     // --- pre-compression edit (crop / aspect / rotate) ---

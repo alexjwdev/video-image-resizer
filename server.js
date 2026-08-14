@@ -9,7 +9,7 @@ const multer = require('multer');
 const compression = require('compression');
 const rateLimit = require('express-rate-limit');
 const session = require('express-session');
-const { compress } = require('./lib/compress');
+const { compress, DEFAULT_PROFILE } = require('./lib/compress');
 const { compressVideo } = require('./lib/video');
 const { isHeic, detectVideoType } = require('./lib/decode');
 const downloadRegistry = require('./lib/download-registry');
@@ -34,6 +34,11 @@ const MAX_FILE_MB      = parseInt(process.env.MAX_FILE_MB, 10) || 25;
 const MAX_FILES        = parseInt(process.env.MAX_FILES, 10) || 20;   // SEC-03: default 20, not 100
 const MAX_CONCURRENT   = parseInt(process.env.MAX_CONCURRENT, 10) || 5;
 const MAX_TARGET_KB    = MAX_FILE_MB * 1024;                          // SEC-04: targetKB ceiling
+// Encoder profile: 'max' (default), 'balanced', or 'fast'. See ENCODE_PROFILES
+// in lib/compress.js. Unset keeps the original max-fidelity behaviour, so a
+// self-hosted or portable build is never silently downgraded; only a hosted
+// deployment paying for CPU has a reason to set this.
+const ENCODE_PROFILE   = process.env.ENCODE_PROFILE || DEFAULT_PROFILE;
 
 // Video (ffmpeg-based) limits — separate from the image knobs above since
 // videos are naturally much larger and far slower to process.
@@ -414,9 +419,15 @@ app.post(
         parseInt(req.body.targetKB, 10) || DEFAULT_TARGET_KB,
         MAX_TARGET_KB
       ) * 1024,
+      // Encoder tuning. Unset = 'max' (lib/compress.js default), which is the
+      // behaviour every self-hosted and portable build keeps. A hosted
+      // deployment serving strangers concurrently sets ENCODE_PROFILE=fast:
+      // roughly 10x less CPU per encode, at the cost of chroma resolution.
+      profile:   ENCODE_PROFILE,
       isBanner:  req.body.isBanner === 'true' || req.body.isBanner === '1',
       minWidth:  parseInt(req.body.minWidth,  10) || 0,
       minHeight: parseInt(req.body.minHeight, 10) || 0,
+      maxWidth:  parseInt(req.body.maxWidth,  10) || 0,
       // Optional pre-compression edit (crop/rotate/flip/aspect-focus); null when absent.
       edit:      parseEdit(req.body),
     };
