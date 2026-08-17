@@ -23,6 +23,10 @@ This one works backwards from a byte budget instead:
   Video can't be binary-searched the same way (each encode is minutes, not milliseconds), so instead the target byte budget and clip duration are used to compute a starting bitrate directly, encode once, and allow exactly one corrective re-encode if the result overshoots by more than a few percent.
   If even the lowest rung of a resolution/audio-bitrate ladder can't hit the budget without falling below a sane quality floor, it degrades gracefully rather than failing outright.
 
+- **Editing sends geometry, not pixels.**
+  The crop/rotate/flip/focus editor is a canvas UI, but it never re-encodes in the browser - it sends only the geometry.
+  The server bakes EXIF orientation and the edit into pixels with sharp *before* the target-size search runs, so the resolution ladder and minimum-resolution floor stay coherent against the edited dimensions rather than the original ones.
+
 The core logic for both lives in [`lib/compress.js`](lib/compress.js) (images) and [`lib/video.js`](lib/video.js) (video).
 `server.js` is a thin HTTP wrapper around them.
 
@@ -31,6 +35,9 @@ The core logic for both lives in [`lib/compress.js`](lib/compress.js) (images) a
 - **Images in:** JPEG, PNG, WebP, GIF, AVIF, BMP, HEIC/HEIF
 - **Images out:** JPEG, WebP, or PNG, guaranteed to be at or under the target size (default 500 KB)
 - **Image controls:** banner mode (never shrinks width, only quality), minimum-resolution floor with a conflict UI when the floor and the target disagree
+- **Pre-compression editor:** crop, aspect presets (1:1 / 4:3 / 16:9 / original / custom), rotate, flip, zoom, and a focus point - applied to one image or across the whole batch.
+  Only geometry is sent to the server; the original bytes still go through the quality pipeline.
+  Not offered for GIF (a crop would flatten the animation) or HEIC/HEIF (browsers can't decode those onto a canvas)
 - **Video in:** MP4, MOV, WebM, AVI
 - **Video out:** MP4 (H.264), best-effort target size (default 50 MB, typically within about 5%)
 - **Batch processing:** drop a mix of images and videos at once, download results individually or as a single ZIP
@@ -79,6 +86,47 @@ freely with no volume to manage.
 Video encoding is CPU-heavy - if this shares a host with other services, set resource limits
 (see the commented-out `deploy.resources` block in `docker-compose.yml`, or `docker run --cpus`/`--memory`).
 
+### Or build a 1-click portable app (Windows or macOS)
+
+If you want to hand someone a folder they can double-click - no Node install, no command line - build a portable bundle:
+
+```bash
+npm install
+npm run build:portable          # add -- --zip to also produce a .zip
+```
+
+On Windows this writes `dist/ImageResizer-portable/`:
+
+```
+Image Resizer.cmd      double-click to start   (macOS: "Image Resizer.command")
+README.txt
+node.exe               the bundled Node runtime  (macOS: "node")
+app/                   server.js, lib, public, and production node_modules
+```
+
+Double-clicking the launcher starts a local server on a free `127.0.0.1` port and opens the app in the default browser; closing the small window stops it.
+Nothing is installed and nothing leaves the machine.
+Copy the whole folder to a USB stick or another machine of the same OS and it just runs.
+
+How it is built (see [`scripts/build-portable.mjs`](scripts/build-portable.mjs)): it bundles the Node runtime the build was run with and **copies** the already-working `node_modules`, so the native `sharp` and bundled `ffmpeg` binaries are the exact ones proven on the build machine - no ABI rebuild and no network install.
+Dev-only packages are pruned.
+The bundle is around 250 MB, most of which is `ffmpeg` and `libvips` - drop `@ffmpeg-installer`/`@ffprobe-installer` from `dependencies` and rebuild if you want an images-only build about 80 MB smaller.
+
+**Building for another OS (cross-build).** Native binaries are OS- and CPU-specific, so a bundle only runs on the platform it targets.
+By default the script builds for the current machine; pass `--target` to build for another:
+
+```bash
+npm run build:portable -- --target=darwin-arm64   # Apple Silicon macOS (M1-M4)
+npm run build:portable -- --target=darwin-x64     # Intel macOS
+```
+
+A cross-build downloads the target's Node from nodejs.org and resolves target-native `node_modules` via `npm ci --os --cpu`, then emits the matching launcher (`.cmd` / `.command` / `.sh`) and a ready-to-ship `dist/ImageResizer-portable-<target>.zip` (POSIX paths and executable bits preserved).
+Building **on** the target OS is still the most robust option when you have access to it.
+
+**macOS first run.** A cross-built bundle is unsigned, so macOS quarantines it after download.
+The bundle's `README.txt` carries the one-time command to clear it (`xattr -dr com.apple.quarantine . && chmod +x node "Image Resizer.command"`); after that, double-click `Image Resizer.command` any time.
+Signing it away entirely needs an Apple Developer certificate and a Mac.
+
 ## Configuration
 
 All configuration is via environment variables, loaded from a `.env` file in the project root if one exists.
@@ -93,10 +141,30 @@ Nothing here is required; every variable has a sane default and the app is fully
 | `TARGET_KB` | `500` | Default image target size in KB (overridable per job in the UI) |
 | `MAX_FILE_MB` | `25` | Max size of a single uploaded image, in MB |
 | `MAX_FILES` | `20` | Max number of files per batch upload |
+| `ENCODE_PROFILE` | `max` | JPEG/WebP encoder tuning: `max`, `balanced`, or `fast`. See below |
 | `MAX_CONCURRENT` | `5` | Max number of `/api/compress` requests processed at once (excess requests get a 503) |
 | `MAX_VIDEO_MB` | `500` | Max size of a single uploaded video, in MB |
 | `VIDEO_TARGET_MB` | `50` | Default video target size in MB |
 | `MAX_VIDEO_CONCURRENT` | `1` | Max number of videos encoded at once (video encodes are CPU-heavy, so this is intentionally low) |
+
+#### Encoder profiles
+
+The target-size search runs a lot of encodes, so the per-encode cost dominates total runtime.
+`ENCODE_PROFILE` picks that trade-off.
+Measured on `test/samples/photo.jpg` (2400x1600, 2.9MB) to a 500KB JPEG target:
+
+| Profile | Encoder | CPU per image | Result |
+| --- | --- | --- | --- |
+| `max` (default) | mozjpeg, 4:4:4 chroma | ~12.7s | 1734px, 482KB, q34 |
+| `balanced` | mozjpeg, 4:2:0 chroma | ~7.9s | 2040px, 486KB, q40 |
+| `fast` | libjpeg-turbo, 4:2:0 chroma | ~1.3s | 1734px, 491KB, q45 |
+
+`max` is the default so nothing changes for anyone self-hosting or running the portable build.
+It is the right choice when you own the machine and care most about colour fidelity on flat-colour graphics, where 4:2:0 chroma subsampling is visible.
+
+`balanced` is worth knowing about: mozjpeg's trellis quantization produces smaller files, which lets the resolution ladder stop at a *wider* width, so it often returns a higher-resolution image than `max` for ~60% of the CPU.
+
+`fast` is roughly 10x cheaper per encode and is intended for a deployment serving many people at once, where sustained throughput matters more than chroma resolution.
 
 ### Optional feature 1: Microsoft Entra ID (Azure AD) SSO
 
@@ -180,7 +248,8 @@ A few non-obvious things worth knowing before touching the code:
 - **PNG is lossless** - there's no quality knob the way JPEG/WebP have one. `compress()` uses palette quantization as the searchable size knob instead. Encoding a photographic/noisy image to PNG at high effort is slow (each search step is a full re-quantization); real graphics/screenshots are fast. Prefer JPEG/WebP for photos.
 - **JPEG almost always fits the target**, even at large dimensions, because the lowest quality setting compresses very aggressively. Size/resolution conflicts mostly show up with PNG output or a large minimum-resolution floor.
 - **The CSP intentionally allows `data:`/`blob:` for images and media.** Compressed results and previews are delivered as data URLs and object URLs; tightening `imgSrc`/`mediaSrc` in `server.js` will break previews.
-- **Don't add the `canvas` npm package to this process.** sharp and canvas loaded in the same Node process are known to crash on Windows.
+- **Don't add the `canvas` npm package to this process.** sharp and canvas loaded in the same Node process are known to crash on Windows. (The pre-compression editor uses a client-side `<canvas>` in the browser, which is unrelated and safe.)
+- **Editor crop coordinates live in "baked" pixel space.** The browser canvas draws the image already EXIF-oriented (browsers do this for `<img>` automatically) plus any user rotate/flip, and sends crop rectangles measured in that space. The server mirrors it exactly in `lib/compress.js applyEdit()`: a two-stage bake (auto-orient, then flip/rotate to pixels, then extract or cover-crop) that runs before metadata is read. If you change the transform order on one side, change it on the other, or EXIF-rotated phone photos will crop the wrong region.
 - **`multer` must stay on the 2.x line** - 1.x has known vulnerabilities.
 
 ## License

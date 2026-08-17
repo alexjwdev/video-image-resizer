@@ -1,199 +1,520 @@
+/* ============================================================================
+   Image Resizer - visual theme
+   "Dimension": dusk-lit workspace, frosted glass panels. Deep matte-black
+   canvas (#0a0a0a), graphite elevated surfaces, translucent frosted panels,
+   9999px pill controls, hairline borders instead of shadows, medium (500)
+   weight headlines. The single chromatic accent (#6b62f2 violet) appears
+   only as a decorative gradient wash / glow - never as a solid fill on any
+   control, text, or status indicator.
+   ============================================================================ */
+
 :root {
-  --bg:       #0f1420;
-  --panel:    #1a2030;
-  --panel-2:  #222a3d;
-  --line:     #2e3850;
-  --text:     #e7ecf5;
-  --muted:    #95a0b8;
-  /* Overridable at runtime via BRAND_ACCENT_COLOR/BRAND_HIGHLIGHT_COLOR env
-     vars (see server.js) - these are just the generic defaults. */
-  --accent:      #4f8cff;
-  --accent-2:    #3a6fd8;
-  --highlight:   #4f8cff;
-  --good:     #38c172;
-  --warn:     #f0b429;
-  --danger:   #e3556e;
-  --radius:   12px;
+  /* Tells the browser this page supports a dark UI, so NATIVE form chrome
+     (select's dropdown option list, checkbox/radio ring, number-input
+     spinner buttons, range track, scrollbars) renders with dark-appropriate
+     colors instead of the browser's light-mode default - the part of these
+     controls our own CSS (color/background/accent-color) cannot reach.
+     Flipped to "light" under the [data-theme="light"] override below. */
+  color-scheme: dark;
+
+  /* -- Dimension design tokens --------------------------------------------- */
+  --color-void-canvas:   #0a0a0a;  /* page background */
+  --color-graphite:      #161616;  /* elevated surface: overlays, dropdowns */
+  --color-frosted-glass: #d4d4d4;  /* translucent panel fill base (used at 8-10% alpha) */
+  --color-ink-black:     #000000;  /* icon strokes on light (white) surfaces */
+  --color-snow-white:    #ffffff;  /* the one filled-button / inverted surface */
+  --color-bone:          #ededed;  /* primary text on dark surfaces */
+  --color-ash:           #c2c2c2;  /* secondary text, helper copy */
+  --color-slate:         #818181;  /* muted / tertiary metadata - lightened from #686868, which was WCAG-AA-failing (3.2:1) for normal text on the frosted panel background; now 4.55:1 */
+  --color-smoke:         #b2b2b2;  /* idle/disabled control text */
+  --color-hairline:      #e5e5e5; /* 1px borders - a light edge on dark surfaces */
+  --color-violet:        #6b62f2; /* the ONLY chromatic accent - gradient/glow only */
+
+  /* frosted glass panel: translucent fill + hairline, elevation via
+     translucency and surface contrast, never a drop shadow */
+  --frost-fill:   rgba(212,212,212,0.07);
+  --frost-fill-2: rgba(212,212,212,0.11);
+  --frost-border: rgba(229,229,229,0.14);
+  --frost-blur:   blur(16px);
+
+  /* Same-direction surface tints (hover/focus fills, progress track, panel
+     inner ring): white-alpha "lighten" washes that only read correctly on a
+     dark surface. Themed as tokens (flipped to black-alpha under the light
+     override below) so every hover/focus state stays visible in both themes
+     instead of one theme's controls silently losing their affordance. */
+  --tint-1:    rgba(255,255,255,0.03);
+  --tint-2:    rgba(255,255,255,0.04);
+  --tint-3:    rgba(255,255,255,0.06);
+  --tint-4:    rgba(255,255,255,0.08);
+  --panel-ring: rgba(255,255,255,0.1) 0px 0px 0px 1px inset;
+  /* Hover shade for the one filled/inverted control (.btn.primary, a.dl).
+     Dark theme: white fill -> hover dims slightly. Light theme (below): the
+     fill itself flips to near-black, so hover must lighten instead. */
+  --primary-hover: #e2e2e2;
+
+  /* radii - the pill silhouette is the system's defining shape */
+  --radius-ui:     10px;
+  --radius-cards:  24px;
+  --radius-panels: 42px;
+  --radius-icons:  4px;
+  --radius-pill:   9999px;
+
+  /* type */
+  --font-dm-sans: 'DM Sans', 'Inter', ui-sans-serif, system-ui, -apple-system,
+                  BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-geist:   'Geist', 'Inter', ui-sans-serif, system-ui, -apple-system,
+                  BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+
+  /* -- legacy semantic aliases mapped onto the tokens above, so every existing
+        component rule adopts the dark frosted-glass system without a from-scratch
+        rewrite of every selector. --accent/--highlight stay a neutral bright
+        (bone) so all functional emphasis (focus rings, active borders, progress
+        fill) reads as quiet neutral highlight, NOT the violet brand accent -
+        violet is reserved exclusively for the two decorative gradient touches
+        below (topbar wash + dropzone glow), never tied to an overridable
+        interactive-state variable. Overridable at runtime via
+        BRAND_ACCENT_COLOR/BRAND_HIGHLIGHT_COLOR (see server.js). ------------ */
+  --bg:        var(--color-void-canvas);
+  --panel:     var(--color-graphite);
+  --panel-2:   #202020;
+  --line:      var(--frost-border);
+  --text:      var(--color-bone);
+  --muted:     var(--color-ash);
+  --accent:    var(--color-bone);
+  --accent-2:  var(--color-smoke);
+  --highlight: var(--color-bone);
+  --good:      var(--color-bone);
+  --warn:      #e0b34d;
+  --danger:    #e5788a;
+  --radius:    var(--radius-cards);
+}
+
+/* ── Light theme override ────────────────────────────────────────────────────
+   Toggled via [data-theme="light"] on <html> (set by theme-init.js before
+   first paint, and by the topbar toggle at runtime - see app.js). Every
+   component rule in this file reads the --color-*, --frost-*, --tint-* tokens
+   rather than hardcoded hex, so overriding just the tokens here re-themes the
+   whole page; nothing below needs a component-level rewrite. Two families of
+   token need real value changes (not just swapped lightness), because they
+   are directional in the dark theme:
+     - --frost-fill/-2/-border and --tint-1..4 are additive WHITE-alpha washes
+       (lighten a dark surface) - on a light canvas they'd be invisible, so
+       they flip to black-alpha tints of similar visual weight.
+     - --danger needs a more saturated, higher-contrast red: the dark-theme
+       value is calibrated to sit on a near-black surface and fails contrast
+       as text on a light one.
+   --color-violet (the one chromatic accent) and all radii/fonts are
+   theme-agnostic and intentionally left untouched. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --color-void-canvas:   #f7f7f8;  /* page background - soft off-white, not stark */
+  --color-graphite:      #ffffff;  /* elevated surface: cards, panels, dropdowns */
+  --color-frosted-glass: #0a0a0a;  /* translucent panel fill base flips dark */
+  --color-snow-white:    #0a0a0a;  /* the inverted fill flips too - primary buttons become dark-on-light */
+  --color-bone:          #171717;  /* primary text on light surfaces */
+  --color-ash:           #52525b;  /* secondary text */
+  --color-slate:         #6c6c6c;  /* muted / tertiary metadata - darkened from #7a7a7a, which was WCAG-AA-failing (3.7:1) for normal text on the frosted panel background; now 4.56:1 */
+  --color-smoke:         #6c6c6c;  /* idle/disabled control text - darkened from #a8a8a8, which was badly failing (2.2-4.2:1, e.g. the queue row's "Edit" button label); now 4.56:1. Same value as --color-slate here since both needed the same floor - dark theme keeps them distinct since its --color-smoke already passed */
+  --color-hairline:      #e2e2e2;
+
+  --frost-fill:   rgba(10,10,10,0.035);
+  --frost-fill-2: rgba(10,10,10,0.06);
+  --frost-border: rgba(10,10,10,0.10);
+
+  --tint-1: rgba(10,10,10,0.035);
+  --tint-2: rgba(10,10,10,0.045);
+  --tint-3: rgba(10,10,10,0.07);
+  --tint-4: rgba(10,10,10,0.08);
+  --panel-ring: rgba(10,10,10,0.06) 0px 0px 0px 1px inset;
+
+  --warn:   #a15c00;
+  --danger: #dc2626;
+  --primary-hover: #262626;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
+html, body { height: 100%; }
+
 body {
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-family: var(--font-dm-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
   background: var(--bg);
   color: var(--text);
+  font-size: 16px;
   line-height: 1.5;
 }
 body.overlay-open { overflow: hidden; }
 
+:focus-visible { outline: 1.5px solid var(--color-bone); outline-offset: 2px; }
+
 /* ── Top bar ──────────────────────────────────────────────────────────────── */
-.topbar { padding: 18px 24px 14px; border-bottom: 1px solid var(--line); }
-.topbar-inner { max-width: 960px; margin: 0 auto; }
-.topbar h1  { font-size: 21px; font-weight: 600; letter-spacing: -.2px; color: var(--highlight); }
-.tagline    { margin-top: 3px; color: var(--muted); font-size: 13px; }
+/* Graphite elevated surface, hairline bottom edge, and a single restrained
+   touch of the signature Dusk Violet wash as a horizontal highlight strip
+   underneath - decorative only, never a background fill or control color. */
+.topbar {
+  padding: 22px 32px 18px;
+  background: var(--color-graphite);
+  border-bottom: 1px solid var(--frost-border);
+  position: relative;
+}
+.topbar::after {
+  content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 1px;
+  background: linear-gradient(90deg,
+    rgba(10,10,10,0) 0%, rgba(10,10,10,0) 40%,
+    rgba(107,98,242,0.565) 50%,
+    rgba(10,10,10,0) 60%, rgba(10,10,10,0) 100%);
+  pointer-events: none;
+}
+.topbar-inner { max-width: 100%; margin: 0; }
+.topbar h1  {
+  font-family: var(--font-geist); font-size: 24px; font-weight: 600;
+  letter-spacing: -0.2px; color: var(--color-bone); line-height: 1.2;
+}
+.tagline    { margin-top: 4px; color: var(--color-ash); font-size: 14px; font-weight: 400; }
 .topbar-row { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
-.auth-status { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+.topbar-actions { display: flex; align-items: center; gap: 12px; }
+.auth-status { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--color-ash); }
 .auth-status[hidden] { display: none; }
-.auth-status a { color: var(--accent); text-decoration: none; }
+.auth-status a { color: var(--color-bone); text-decoration: none; font-weight: 500; }
 .auth-status a:hover { text-decoration: underline; }
 
-.wrap { max-width: 960px; margin: 0 auto; padding: 22px 24px; }
+/* Light/dark toggle - a plain icon pill, not the primary/inverted treatment,
+   so it doesn't compete with the Compress CTA for visual weight. */
+.theme-toggle {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; flex-shrink: 0;
+  background: var(--tint-2); border: 1px solid var(--frost-border);
+  border-radius: var(--radius-pill); color: var(--color-bone);
+  cursor: pointer; transition: background .15s, border-color .15s;
+}
+.theme-toggle:hover { background: var(--tint-3); border-color: var(--color-bone); }
+.theme-toggle svg { width: 17px; height: 17px; stroke-width: 1.75; }
+.theme-toggle .icon-moon { display: none; }
+:root[data-theme="light"] .theme-toggle .icon-sun  { display: none; }
+:root[data-theme="light"] .theme-toggle .icon-moon { display: block; }
+
+/* Full-width shell. Options is a tall left column (settings live together,
+   independent of what's queued); the right column stacks the drag-drop/
+   queue panel, its action bar, then results below. Falls back to a single
+   stacked column (in source order) on narrow viewports. */
+.wrap {
+  max-width: 100%;
+  margin: 0;
+  padding: 28px 32px 40px;
+  display: grid;
+  grid-template-columns: minmax(380px, 460px) 1fr;
+  grid-template-rows: auto auto auto;
+  grid-template-areas:
+    "options upload"
+    "options actions"
+    "options results";
+  align-items: start;
+  /* Tight row-gap: upload-col sits right above its own action bar, they read
+     as one flow. Results is a separate section (own header) - restore extra
+     breathing room there via results-pane's margin-top instead. */
+  gap: 10px 28px;
+}
+@media (max-width: 900px) {
+  .wrap {
+    grid-template-columns: 1fr;
+    grid-template-areas: "options" "upload" "actions" "results";
+    padding: 20px 16px 32px;
+  }
+}
+
+.upload-col    { grid-area: upload;  display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.action-col    { grid-area: actions; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.options-panel { grid-area: options; }
+.results-pane  { grid-area: results; min-width: 0; margin-top: 14px; }
+
+/* ── Frosted glass panel mixin (dropzone / options / progress) ───────────── */
+.dropzone, .options-panel, .progress-wrap {
+  background: var(--frost-fill);
+  backdrop-filter: var(--frost-blur);
+  -webkit-backdrop-filter: var(--frost-blur);
+  border: 1px solid var(--frost-border);
+}
 
 /* ── Drop zone ────────────────────────────────────────────────────────────── */
 .dropzone {
-  border: 2px dashed var(--line);
-  border-radius: var(--radius);
-  background: var(--panel);
-  padding: 34px 20px;
+  border-radius: var(--radius-cards);
+  padding: 40px 20px;
   text-align: center;
   cursor: pointer;
   transition: border-color .15s, background .15s, padding .2s;
-  margin-bottom: 12px;
+  position: relative;
+  overflow: hidden;
 }
-.dropzone.drag      { border-color: var(--accent); background: var(--panel-2); }
+/* Radial Spotlight: a soft violet glow anchored behind the primary action -
+   this tool's de facto hero moment - fading to nothing. Decorative only. */
+.dropzone::before {
+  content: ''; position: absolute; inset: -40% -20% auto -20%; height: 220%;
+  background: radial-gradient(circle at 50% 0%, rgba(107,98,242,0.16), transparent 60%);
+  pointer-events: none;
+}
+.dropzone > * { position: relative; }
+.dropzone.drag      { border-color: var(--color-bone); background: var(--frost-fill-2); }
 .dropzone.has-files { padding: 16px 20px; }
 .dropzone.has-files .dz-icon { display: none; }
 .dropzone.has-files .dz-inner strong { font-size: 14px; }
 
-.dz-icon   { width: 30px; height: 30px; stroke: var(--muted); display: block; margin: 0 auto 10px; }
-.dz-inner strong { display: block; font-size: 17px; }
-.dz-inner span   { color: var(--muted); font-size: 14px; }
-.dz-inner small  { display: block; margin-top: 8px; color: var(--muted); font-size: 12px; }
+.dz-icon   { width: 30px; height: 30px; stroke: var(--color-ash); stroke-width: 1.5; display: block; margin: 0 auto 12px; }
+.dz-inner strong { display: block; font-family: var(--font-geist); font-size: 18px; font-weight: 500; color: var(--color-bone); }
+.dz-inner span   { color: var(--color-ash); font-size: 14px; }
+.dz-inner small  { display: block; margin-top: 8px; color: var(--color-slate); font-size: 12px; }
 
 .link {
-  background: none; border: none; color: var(--accent);
-  cursor: pointer; font: inherit; padding: 0; text-decoration: underline;
+  background: none; border: none; color: var(--color-bone); font-weight: 500;
+  cursor: pointer; font-family: inherit; font-size: inherit; padding: 0; text-decoration: underline; text-underline-offset: 2px;
 }
 
 /* ── Queue list ───────────────────────────────────────────────────────────── */
 .queue-list {
-  display: flex; flex-direction: column; gap: 5px;
-  max-height: 240px; overflow-y: auto;
-  margin-bottom: 12px;
-  scrollbar-width: thin; scrollbar-color: var(--line) transparent;
+  display: flex; flex-direction: column; gap: 8px;
+  max-height: 280px; overflow-y: auto;
+  scrollbar-width: thin; scrollbar-color: var(--frost-border) transparent;
 }
+.queue-list[hidden] { display: none; }
 .qi {
+  position: relative; overflow: hidden; flex-shrink: 0;
   display: flex; align-items: center; gap: 10px;
-  padding: 6px 10px; background: var(--panel);
-  border: 1px solid var(--line); border-radius: 8px;
+  padding: 8px 12px; background: var(--frost-fill);
+  backdrop-filter: var(--frost-blur); -webkit-backdrop-filter: var(--frost-blur);
+  border: 1px solid var(--frost-border); border-radius: var(--radius-ui);
   transition: border-color .15s;
 }
-.qi--compressing { border-color: var(--accent); }
-.qi--done        { border-color: rgba(56,193,114,.4); }
-.qi--error       { border-color: rgba(227,85,110,.4); }
+.qi--compressing { border-color: var(--color-bone); }
+.qi--done        { border-color: var(--frost-border); box-shadow: inset 2px 0 0 var(--color-bone); }
+.qi--error       { border-color: color-mix(in srgb, var(--danger) 55%, var(--frost-border)); }
+
+/* Per-row indeterminate progress: the server has no incremental progress to
+   report for a single compress request, so this shows "actively working",
+   not a real percentage - a sliding segment along the row's bottom edge.
+   Hidden except while that row's status is 'compressing'. */
+.qi-progress { display: none; }
+.qi--compressing .qi-progress {
+  display: block; position: absolute; left: 0; right: 0; bottom: 0; height: 2px;
+}
+.qi--compressing .qi-progress::after {
+  content: ''; position: absolute; top: 0; height: 100%; width: 35%;
+  background: var(--color-bone); border-radius: var(--radius-pill);
+  animation: qi-progress-slide 1.2s ease-in-out infinite;
+}
+@keyframes qi-progress-slide {
+  0%   { left: -35%; }
+  100% { left: 100%; }
+}
 
 .qi-thumb {
   width: 36px; height: 36px; object-fit: cover;
-  border-radius: 5px; background: var(--panel-2); flex-shrink: 0;
+  border-radius: var(--radius-icons); background: var(--color-graphite); flex-shrink: 0;
 }
-.qi-name { flex: 1; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.qi-size { font-size: 12px; color: var(--muted); white-space: nowrap; flex-shrink: 0; }
-.qi-status { flex-shrink: 0; font-size: 13px; width: 18px; text-align: center; }
-.qi-done { color: var(--good); }
+.qi-name { flex: 1; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qi-size { font-size: 12px; color: var(--color-slate); white-space: nowrap; flex-shrink: 0; }
+.qi-status { flex-shrink: 0; font-size: 14px; width: 18px; text-align: center; }
+.qi-done { color: var(--color-bone); }
 .qi-err  { color: var(--danger); }
 .qi-spin {
   display: inline-block; width: 13px; height: 13px;
-  border: 2px solid var(--line); border-top-color: var(--accent);
+  border: 2px solid var(--frost-border); border-top-color: var(--color-bone);
   border-radius: 50%; animation: spin .7s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 .qi-remove {
-  background: none; border: none; color: var(--muted);
-  cursor: pointer; font-size: 14px; padding: 2px 4px;
-  border-radius: 4px; line-height: 1; flex-shrink: 0;
+  background: none; border: none; color: var(--color-smoke);
+  cursor: pointer; font-size: 15px; padding: 2px 5px;
+  border-radius: var(--radius-icons); line-height: 1; flex-shrink: 0;
   transition: color .1s, background .1s;
 }
-.qi-remove:hover { color: var(--danger); background: rgba(227,85,110,.12); }
+.qi-remove:hover { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
 
 /* ── Options panel ────────────────────────────────────────────────────────── */
 .options-panel {
-  background: var(--panel); border: 1px solid var(--line);
-  border-radius: var(--radius); margin-bottom: 12px; overflow: hidden;
+  border-radius: var(--radius-cards); overflow: hidden;
 }
 .options-summary {
   display: flex; justify-content: space-between; align-items: center;
-  padding: 11px 16px; cursor: pointer; list-style: none;
-  font-weight: 600; font-size: 14px; user-select: none;
+  padding: 16px 20px; cursor: pointer; list-style: none;
+  font-family: var(--font-geist); font-weight: 600; font-size: 15px; color: var(--color-bone); user-select: none;
 }
 .options-summary::-webkit-details-marker { display: none; }
-.options-summary:hover { background: var(--panel-2); }
-.chevron { width: 16px; height: 16px; stroke: var(--muted); transition: transform .2s; }
+.options-summary:hover { background: var(--tint-1); }
+.chevron { width: 16px; height: 16px; stroke: var(--color-ash); stroke-width: 2; transition: transform .2s; }
 details[open] .chevron { transform: rotate(180deg); }
 
 .options {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-  gap: 14px; padding: 4px 16px 16px;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 20px 28px; padding: 4px 24px 24px;
 }
-.opt       { display: flex; flex-direction: column; gap: 5px; }
-.opt-label { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
-.opt-help  { color: var(--muted); font-size: 11px; }
+.opt       { display: flex; flex-direction: column; gap: 6px; }
+.opt-label { font-size: 13px; font-weight: 500; color: var(--color-slate); text-transform: uppercase; letter-spacing: 0.6px; }
+.opt-help  { color: var(--color-slate); font-size: 12px; line-height: 1.4; }
 .radios    { display: flex; gap: 12px; flex-wrap: wrap; }
-.radios label, .checkbox { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: 14px; }
-.opt-label.checkbox { font-weight: 600; color: var(--text); text-transform: none; letter-spacing: 0; font-size: 14px; }
+.radios label, .checkbox { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: 14px; color: var(--color-bone); }
+.radios input, .checkbox input { accent-color: var(--color-bone); }
+.opt-label.checkbox { font-weight: 500; color: var(--color-bone); text-transform: none; letter-spacing: 0; font-size: 14px; }
 
-/* Image/video settings groups — shown/hidden based on what's queued */
+/* Image/video settings groups - shown/hidden based on what's queued */
 .opt-group {
   grid-column: 1 / -1;
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-  gap: 14px; padding-top: 12px; border-top: 1px solid var(--line);
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 20px 28px; padding-top: 16px; border-top: 1px solid var(--frost-border);
 }
 .opt-group[hidden] { display: none; }
 .opt-group-title {
-  grid-column: 1 / -1; margin: 0; font-size: 12px; font-weight: 700;
-  color: var(--accent); text-transform: uppercase; letter-spacing: .4px;
+  grid-column: 1 / -1; margin: 0; font-size: 13px; font-weight: 500;
+  color: var(--color-bone); text-transform: uppercase; letter-spacing: 0.6px;
 }
 
-input[type="number"], select {
-  background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
-  border-radius: 7px; padding: 7px 10px; font: inherit; font-size: 14px; width: 100%;
+.opt-featured { grid-column: 1 / -1; }
+
+.advanced { grid-column: 1 / -1; }
+.advanced-summary {
+  cursor: pointer; list-style: none; font-size: 13px; font-weight: 500;
+  color: var(--color-slate); text-transform: uppercase; letter-spacing: 0.6px;
 }
+.advanced-summary::-webkit-details-marker { display: none; }
+.advanced-summary:hover { color: var(--color-bone); }
+.advanced[open] .advanced-summary { margin-bottom: 10px; }
+
+input[type="number"], select {
+  background: var(--tint-2); border: 1px solid var(--frost-border); color: var(--color-bone);
+  border-radius: var(--radius-ui); padding: 9px 12px; font: inherit; font-size: 14px; width: 100%;
+  transition: border-color .12s, background .12s;
+}
+input[type="number"]:focus, select:focus {
+  outline: none; background: var(--tint-3); border-color: var(--color-bone);
+}
+input[type="number"]::placeholder { color: var(--color-slate); }
 select { cursor: pointer; }
-.minres { display: flex; align-items: center; gap: 7px; }
+.minres { display: flex; align-items: center; gap: 8px; }
 .minres input { width: 100%; }
-.minres span  { color: var(--muted); }
+.minres span  { color: var(--color-slate); }
+
+/* ── Custom dropdown (replaces a native <select> so it can be fully
+   restyled - native option popups can't be themed). ─────────────────────── */
+.custom-select { position: relative; }
+.custom-select-btn {
+  width: 100%; display: flex; align-items: center; justify-content: space-between;
+  background: var(--tint-2); border: 1px solid var(--frost-border); color: var(--color-bone);
+  border-radius: var(--radius-ui); padding: 9px 12px; font: inherit; font-size: 14px;
+  cursor: pointer; text-align: left; transition: border-color .12s, background .12s;
+}
+.custom-select-btn:hover, .custom-select-btn[aria-expanded="true"] {
+  background: var(--tint-3); border-color: var(--color-bone);
+}
+.custom-select-btn .chevron { width: 16px; height: 16px; stroke: var(--color-ash); flex-shrink: 0; transition: transform .15s; }
+.custom-select-btn[aria-expanded="true"] .chevron { transform: rotate(180deg); }
+.custom-select-menu {
+  position: absolute; left: 0; right: 0; top: calc(100% + 6px); z-index: 5;
+  background: var(--color-graphite); border: 1px solid var(--frost-border);
+  border-radius: var(--radius-ui); padding: 4px; max-height: 260px; overflow-y: auto;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.35); list-style: none;
+}
+.custom-select-menu li {
+  padding: 8px 10px; border-radius: calc(var(--radius-ui) - 4px); font-size: 14px;
+  color: var(--color-bone); cursor: pointer;
+}
+.custom-select-menu li:hover, .custom-select-menu li:focus { background: var(--tint-3); outline: none; }
+.custom-select-menu li.active { background: var(--tint-4); font-weight: 500; }
+
+/* ── Custom segmented control (replaces radio inputs for output format) ──── */
+.format-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.format-chip {
+  border: 1px solid var(--frost-border); background: transparent; color: var(--color-bone);
+  padding: 8px 16px; border-radius: var(--radius-pill); font: inherit; font-size: 14px; font-weight: 500;
+  cursor: pointer; transition: border-color .12s, background .12s;
+}
+.format-chip:hover  { border-color: var(--color-bone); }
+.format-chip.active { border-color: var(--color-bone); background: var(--color-bone); color: var(--color-graphite); }
+
+/* ── Profile info panel: description + spec chips under the dropdown ─────── */
+.profile-info { display: flex; flex-direction: column; gap: 8px; }
+.profile-desc { color: var(--color-slate); font-size: 12px; line-height: 1.4; min-height: 32px; }
+.profile-specs { display: flex; flex-wrap: wrap; gap: 6px; }
+.spec-chip {
+  font-size: 11px; font-weight: 500; color: var(--color-ash); background: var(--tint-2);
+  border: 1px solid var(--frost-border); border-radius: var(--radius-pill); padding: 3px 9px;
+}
+
+.range-row { display: flex; align-items: center; gap: 10px; }
+.range-row input[type="range"] { flex: 1; accent-color: var(--color-bone); cursor: pointer; }
+.range-row output {
+  min-width: 24px; text-align: center; font-size: 13px; font-weight: 500;
+  color: var(--color-bone); background: var(--tint-2); border: 1px solid var(--frost-border);
+  border-radius: var(--radius-pill); padding: 3px 8px;
+}
 
 /* ── Action bar ───────────────────────────────────────────────────────────── */
 .actionbar {
   display: flex; align-items: center; justify-content: space-between;
-  gap: 12px; flex-wrap: wrap; margin-bottom: 12px;
+  gap: 12px; flex-wrap: wrap;
 }
-.queue-count { color: var(--muted); font-size: 14px; }
-.actions { display: flex; gap: 8px; }
+.actionbar-info { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
+.queue-count { color: var(--color-ash); font-size: 14px; }
+.settings-pill {
+  font-size: 12px; color: var(--color-ash); background: var(--tint-2);
+  border: 1px solid var(--frost-border); border-radius: var(--radius-pill);
+  padding: 4px 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.settings-pill:empty { display: none; }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
+/* Ghost Nav Button: transparent, hairline border, full pill, 85%-opacity text. */
 .btn {
   display: inline-flex; align-items: center; gap: 6px;
-  border: 1px solid var(--line); background: var(--panel-2); color: var(--text);
-  padding: 8px 16px; border-radius: 8px; font: inherit; font-size: 14px;
-  cursor: pointer; transition: background .15s, opacity .15s; white-space: nowrap;
+  border: 1px solid var(--frost-border); background: transparent; color: rgba(237,237,237,0.85);
+  padding: 8px 16px; border-radius: var(--radius-pill); font: inherit; font-size: 14px; font-weight: 500;
+  cursor: pointer; transition: background .15s, border-color .15s, opacity .15s; white-space: nowrap;
 }
-.btn:hover:not(:disabled) { background: var(--line); }
-.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-.btn.primary:hover:not(:disabled) { background: var(--accent-2); }
+.btn:hover:not(:disabled) { background: var(--tint-3); border-color: var(--color-bone); }
+/* White Pill CTA - the only filled button in the system. */
+.btn.primary { background: var(--color-snow-white); border-color: var(--color-snow-white); color: var(--color-graphite); }
+.btn.primary:hover:not(:disabled) { background: var(--primary-hover); border-color: var(--primary-hover); }
 .btn.ghost   { background: transparent; }
 .btn:disabled { opacity: .4; cursor: not-allowed; }
-.btn-icon { width: 14px; height: 14px; flex-shrink: 0; }
+.btn-icon { width: 15px; height: 15px; flex-shrink: 0; }
+/* Same [hidden]-override issue as .card-video etc. above: .btn's
+   display:inline-flex has equal specificity to the UA [hidden] rule and
+   wins by cascade order, so zipBtn stayed visible while queued empty. */
+.btn[hidden] { display: none; }
 
 .error {
-  background: rgba(227,85,110,.1); border: 1px solid var(--danger);
-  color: #ffd5dd; padding: 11px 14px; border-radius: 8px; margin-bottom: 12px; font-size: 14px;
+  background: color-mix(in srgb, var(--danger) 10%, var(--color-graphite));
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--frost-border));
+  color: var(--danger); padding: 12px 16px; border-radius: var(--radius-ui); font-size: 14px;
 }
 
 /* ── Progress bar ─────────────────────────────────────────────────────────── */
+/* Floating notification-style toast, bottom-right - not part of page flow,
+   so it never pushes the rail's other panels around while a batch runs. */
 .progress-wrap {
-  margin-bottom: 16px; padding: 13px 16px;
-  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  position: fixed; right: 20px; bottom: 20px; z-index: 50;
+  width: 320px; max-width: calc(100vw - 40px);
+  padding: 16px 20px;
+  border-radius: var(--radius-cards);
+  box-shadow: 0 8px 30px rgba(0,0,0,0.35);
+}
+@media (max-width: 720px) {
+  .progress-wrap {
+    left: 0; right: 0; bottom: 0; width: 100%; max-width: none;
+    border-radius: var(--radius-cards) var(--radius-cards) 0 0;
+    border-left: none; border-right: none; border-bottom: none;
+  }
 }
 .progress-track {
-  height: 5px; background: var(--panel-2); border-radius: 999px;
-  overflow: hidden; margin-bottom: 9px;
+  height: 6px; background: var(--tint-4); border-radius: var(--radius-pill);
+  overflow: hidden; margin-bottom: 10px;
 }
 .progress-fill {
-  height: 100%; width: 0%; background: var(--accent);
-  border-radius: 999px; transition: width .3s ease;
+  height: 100%; width: 0%; background: var(--color-bone);
+  border-radius: var(--radius-pill); transition: width .3s ease;
 }
 .progress-label {
-  display: flex; justify-content: space-between; font-size: 13px; color: var(--muted);
+  display: flex; justify-content: space-between; font-size: 13px; color: var(--color-ash);
 }
 #progressText  { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 78%; }
 #progressCount { white-space: nowrap; flex-shrink: 0; }
@@ -201,35 +522,43 @@ select { cursor: pointer; }
 /* ── Results header ───────────────────────────────────────────────────────── */
 .results-header {
   display: flex; justify-content: space-between; align-items: baseline;
-  margin-bottom: 14px; flex-wrap: wrap; gap: 6px;
+  margin-bottom: 16px; flex-wrap: wrap; gap: 6px;
 }
-#resultsTitle    { font-weight: 700; font-size: 15px; }
-.results-summary { font-size: 13px; color: var(--good); }
+/* Same [hidden]-override issue as .card-video etc. above: an author display
+   rule always beats the UA [hidden] rule regardless of specificity, so
+   without this "Clear all" left the previous run's title/summary visibly
+   on screen even though .hidden was correctly set to true. */
+.results-header[hidden] { display: none; }
+#resultsTitle    { font-family: var(--font-geist); font-weight: 600; font-size: 18px; color: var(--color-bone); letter-spacing: -0.1px; }
+.results-summary { font-size: 13px; color: var(--color-ash); }
 
 /* ── Results grid ─────────────────────────────────────────────────────────── */
 .results-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 16px;
 }
 
+/* Frosted Glass Feature Card: translucent fill, 24px radius, no shadow -
+   the translucency itself creates the depth. */
 .card {
-  background: var(--panel); border: 1px solid var(--line);
-  border-radius: var(--radius); overflow: hidden;
-  cursor: pointer; transition: border-color .15s, transform .1s, box-shadow .15s;
+  background: var(--frost-fill); backdrop-filter: var(--frost-blur); -webkit-backdrop-filter: var(--frost-blur);
+  border: 1px solid var(--frost-border);
+  border-radius: var(--radius-cards); overflow: hidden;
+  cursor: pointer; transition: border-color .15s, transform .1s, background .15s;
   display: flex; flex-direction: column;
 }
 .card:hover {
-  border-color: var(--accent);
+  border-color: var(--color-bone);
+  background: var(--frost-fill-2);
   transform: translateY(-2px);
-  box-shadow: 0 6px 20px rgba(0,0,0,.35);
 }
 .card:active { transform: translateY(0); }
 .card--error { cursor: default; }
-.card--error:hover { border-color: var(--line); transform: none; box-shadow: none; }
+.card--error:hover { border-color: var(--frost-border); background: var(--frost-fill); transform: none; }
 
 .card-thumb-wrap {
-  position: relative; aspect-ratio: 16/10; overflow: hidden; background: #000;
+  position: relative; aspect-ratio: 16/10; overflow: hidden; background: var(--color-graphite);
 }
 .card-thumb {
   width: 100%; height: 100%; object-fit: cover; display: block;
@@ -237,38 +566,49 @@ select { cursor: pointer; }
 }
 .card:hover .card-thumb { transform: scale(1.03); }
 .card-video { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* Purely decorative - signals "this is a video" now that the card thumbnail
+   has no native controls (they silently ate clicks meant for the card's
+   open-overlay handler). pointer-events:none so it never intercepts clicks
+   itself. */
+.video-play-icon {
+  position: absolute; top: 50%; left: 50%; width: 44px; height: 44px;
+  transform: translate(-50%, -50%); pointer-events: none;
+}
 /* [hidden] is same specificity as the class rules above, so without this the
    author rule wins over the UA stylesheet and the element stays visible even
    when JS sets .hidden = true. */
-.card-thumb[hidden], .card-video[hidden] { display: none; }
+.card-thumb[hidden], .card-video[hidden], .video-play-icon[hidden] { display: none; }
 
+/* Status badge: frosted pill, quiet by default. Over-target reads as error
+   (the palette's only status use of a non-neutral color). */
 .badge {
-  position: absolute; bottom: 7px; right: 7px;
-  font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 999px;
-  background: rgba(56,193,114,.85); color: #fff; white-space: nowrap; backdrop-filter: blur(4px);
+  position: absolute; bottom: 8px; right: 8px;
+  font-size: 12px; font-weight: 500; padding: 3px 9px; border-radius: var(--radius-pill);
+  background: rgba(10,10,10,0.55); backdrop-filter: blur(6px);
+  border: 1px solid var(--frost-border);
+  color: var(--color-bone); white-space: nowrap;
 }
-.badge.over        { background: rgba(240,180,41,.85); }
-/* color-mix (not a hardcoded rgba) so this always tracks --accent, including
-   a runtime brand override - a hardcoded value here previously drifted out
-   of sync with the accent variable when the brand color changed. */
-.badge--pass       { background: color-mix(in srgb, var(--accent) 85%, transparent); }
+.badge.over        { background: color-mix(in srgb, var(--danger) 30%, rgba(10,10,10,0.55)); border-color: color-mix(in srgb, var(--danger) 55%, var(--frost-border)); color: #ffd9df; }
+.badge--pass       { background: rgba(10,10,10,0.55); border-color: var(--frost-border); color: var(--color-bone); }
 
 .card-body {
-  padding: 10px 12px 12px; flex: 1; display: flex; flex-direction: column; gap: 3px;
+  padding: 12px 14px 14px; flex: 1; display: flex; flex-direction: column; gap: 4px;
 }
 .fname {
-  font-size: 13px; font-weight: 600; overflow: hidden;
+  font-size: 14px; font-weight: 500; color: var(--color-bone); overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap;
 }
 .card-sizes {
-  font-size: 12px; color: var(--muted);
+  font-size: 12px; color: var(--color-ash);
   display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
 }
+/* Hairline Ghost tag (10px, not pill) - "integration label" treatment,
+   used here for the compact format tag so it reads quieter than the badge. */
 .card-format {
-  font-size: 10px; font-weight: 700; letter-spacing: .02em;
-  padding: 1px 6px; border-radius: 999px;
-  background: var(--panel-2); color: var(--text);
-  border: 1px solid var(--line);
+  font-size: 11px; font-weight: 500; letter-spacing: 0.2px;
+  padding: 2px 8px; border-radius: var(--radius-ui);
+  background: transparent; color: var(--color-smoke);
+  border: 1px solid var(--frost-border);
 }
 
 /* ── Overlay ──────────────────────────────────────────────────────────────── */
@@ -281,38 +621,38 @@ select { cursor: pointer; }
 
 .overlay-bg {
   position: absolute; inset: 0;
-  background: rgba(10,14,26,.85); backdrop-filter: blur(6px);
+  background: rgba(10,10,10,.7); backdrop-filter: blur(8px);
   cursor: pointer;
 }
 
 .overlay-panel {
   position: relative; z-index: 1;
-  background: var(--panel); border: 1px solid var(--line);
-  border-radius: 16px; width: 100%; max-width: 860px;
+  background: var(--color-graphite); border: 1px solid var(--frost-border);
+  border-radius: var(--radius-panels); width: 100%; max-width: 880px;
   max-height: 92vh; overflow-y: auto;
   display: flex; flex-direction: column; gap: 0;
-  box-shadow: 0 24px 60px rgba(0,0,0,.6);
+  box-shadow: var(--panel-ring);
 }
 
 .overlay-head {
   display: flex; justify-content: space-between; align-items: center;
-  padding: 14px 18px; border-bottom: 1px solid var(--line); flex-shrink: 0;
+  padding: 18px 22px; border-bottom: 1px solid var(--frost-border); flex-shrink: 0;
 }
 .overlay-fname {
-  font-weight: 600; font-size: 15px; overflow: hidden;
+  font-weight: 500; font-size: 16px; color: var(--color-bone); overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; max-width: calc(100% - 40px);
 }
 .overlay-close {
-  background: none; border: none; color: var(--muted);
+  background: none; border: none; color: var(--color-ash);
   font-size: 18px; cursor: pointer; padding: 4px 8px;
-  border-radius: 6px; line-height: 1; transition: color .1s, background .1s; flex-shrink: 0;
+  border-radius: var(--radius-icons); line-height: 1; transition: color .1s, background .1s; flex-shrink: 0;
 }
-.overlay-close:hover { color: var(--text); background: var(--panel-2); }
+.overlay-close:hover { color: var(--color-bone); background: var(--tint-3); }
 
-.overlay-compare { padding: 16px 18px 0; }
+.overlay-compare { padding: 20px 22px 0; }
 .overlay-video {
   display: block; width: 100%; max-height: 55vh;
-  margin: 16px 18px 0; border-radius: 9px; background: #000;
+  margin: 20px 22px 0; border-radius: var(--radius-ui); background: #000;
 }
 /* Same [hidden]-override issue as .card-video above. */
 .overlay-video[hidden] { display: none; }
@@ -320,8 +660,8 @@ select { cursor: pointer; }
 /* Before/After compare (shared by overlay) */
 .compare-stage {
   position: relative; width: 100%; overflow: hidden;
-  border-radius: 9px; background: #000; cursor: ew-resize; user-select: none;
-  max-height: 55vh;
+  border-radius: var(--radius-ui); background: #000; cursor: ew-resize; user-select: none;
+  max-height: 55vh; border: 1px solid var(--frost-border);
 }
 .img-before, .img-after {
   display: block; width: 100%; height: 100%;
@@ -336,57 +676,163 @@ select { cursor: pointer; }
   height: 100%; width: 36px; display: flex; flex-direction: column;
   align-items: center; pointer-events: none; cursor: ew-resize;
 }
-.divider-line { width: 2px; height: 100%; background: var(--accent); }
+.divider-line { width: 2px; height: 100%; background: var(--color-bone); }
 .divider-pill {
   position: absolute; top: 50%; transform: translateY(-50%);
-  background: var(--accent); color: #fff; font-size: 9px; letter-spacing: 1px;
-  padding: 4px 7px; border-radius: 999px; white-space: nowrap;
-  box-shadow: 0 2px 8px rgba(0,0,0,.5); user-select: none;
+  background: var(--color-bone); color: var(--color-graphite); font-size: 9px; letter-spacing: 1px;
+  padding: 4px 7px; border-radius: var(--radius-pill); white-space: nowrap;
+  user-select: none;
 }
 .slider {
-  width: 100%; margin-top: 10px; cursor: ew-resize; accent-color: var(--accent);
+  width: 100%; margin-top: 12px; cursor: ew-resize; accent-color: var(--color-bone);
 }
 .compare-labels {
   display: flex; justify-content: space-between;
-  color: var(--muted); font-size: 12px; margin-top: 4px; padding-bottom: 14px;
+  color: var(--color-slate); font-size: 12px; margin-top: 4px; padding-bottom: 16px;
 }
 
 .overlay-stats {
-  display: flex; flex-wrap: wrap; gap: 14px;
-  padding: 0 18px 14px; font-size: 14px; color: var(--muted);
-  border-top: 1px solid var(--line); padding-top: 14px;
+  display: flex; flex-wrap: wrap; gap: 16px;
+  padding: 0 22px 16px; font-size: 14px; color: var(--color-ash);
+  border-top: 1px solid var(--frost-border); padding-top: 16px;
 }
-.overlay-stats b { color: var(--text); }
-.overlay-stats em { color: var(--accent); font-style: normal; }
+.overlay-stats b { color: var(--color-bone); font-weight: 600; }
+.overlay-stats em { color: var(--color-bone); font-style: normal; font-weight: 600; }
 
-/* Conflict (in overlay) */
+/* Conflict (in overlay) - neutral chooser, not an error, so it stays achromatic. */
 .overlay-conflict {
-  margin: 0 18px; padding: 14px;
-  border: 1px solid rgba(240,180,41,.5); background: rgba(240,180,41,.07);
-  border-radius: 9px; margin-bottom: 14px;
+  margin: 0 22px 16px; padding: 16px;
+  border: 1px solid var(--frost-border); background: var(--tint-1);
+  border-radius: var(--radius-ui);
 }
-.overlay-conflict h4 { color: var(--warn); font-size: 14px; margin-bottom: 6px; }
-.overlay-conflict p  { color: var(--text); font-size: 13px; margin-bottom: 12px; }
+.overlay-conflict h4 { color: var(--color-bone); font-size: 14px; font-weight: 600; margin-bottom: 6px; }
+.overlay-conflict p  { color: var(--color-ash); font-size: 14px; margin-bottom: 12px; }
 .conflict-choices    { display: flex; gap: 10px; flex-wrap: wrap; }
 .choice {
-  flex: 1 1 180px; border: 1px solid var(--line); background: var(--panel-2);
-  border-radius: 9px; padding: 11px; cursor: pointer; text-align: left;
-  color: var(--text); font: inherit; transition: border-color .15s;
+  flex: 1 1 180px; border: 1px solid var(--frost-border); background: var(--tint-1);
+  border-radius: var(--radius-ui); padding: 12px; cursor: pointer; text-align: left;
+  color: var(--color-bone); font: inherit; transition: border-color .15s;
 }
-.choice:hover  { border-color: var(--accent); }
-.choice.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.choice:hover  { border-color: var(--color-bone); }
+.choice.active { border-color: var(--color-bone); box-shadow: 0 0 0 1px var(--color-bone) inset; }
 .choice .ctitle { font-weight: 600; display: block; margin-bottom: 3px; font-size: 14px; }
-.choice .cmeta  { color: var(--muted); font-size: 12px; }
+.choice .cmeta  { color: var(--color-ash); font-size: 12px; }
 
 .overlay-actions {
-  padding: 0 18px 18px; display: flex; gap: 10px;
+  padding: 0 22px 22px; display: flex; gap: 10px;
 }
 
+/* Download = primary white pill (the CTA treatment). */
 a.dl {
   display: inline-flex; align-items: center; gap: 6px;
-  text-decoration: none; background: var(--accent); color: #fff;
-  padding: 9px 20px; border-radius: 8px; font: inherit; font-size: 14px;
+  text-decoration: none; background: var(--color-snow-white); color: var(--color-graphite);
+  padding: 9px 20px; border-radius: var(--radius-pill); font: inherit; font-size: 14px; font-weight: 500;
   transition: background .15s;
 }
-a.dl:hover    { background: var(--accent-2); }
+a.dl:hover    { background: var(--primary-hover); }
 a.dl::before  { content: '↓'; font-size: 14px; }
+
+/* ── Per-row edit affordance ──────────────────────────────────────────────── */
+/* Hairline Ghost Button profile (10px, not pill) - "integration label" scale. */
+.qi-edit {
+  background: none; border: 1px solid var(--frost-border); color: var(--color-smoke);
+  cursor: pointer; font: inherit; font-size: 12px; font-weight: 500; line-height: 1;
+  padding: 5px 10px; border-radius: var(--radius-ui); flex-shrink: 0;
+  transition: color .1s, background .1s, border-color .1s;
+}
+.qi-edit:hover { color: var(--color-bone); background: var(--tint-3); border-color: var(--color-bone); }
+.qi-chip {
+  flex-shrink: 0; font-size: 11px; font-weight: 500; letter-spacing: 0.3px;
+  text-transform: uppercase; padding: 2px 8px; border-radius: var(--radius-ui);
+  background: transparent;
+  color: var(--color-ash); border: 1px solid var(--frost-border);
+}
+.qi-chip[hidden] { display: none; }
+
+/* ── Edit overlay ─────────────────────────────────────────────────────────── */
+.edit-panel { max-width: 960px; }
+.edit-body {
+  display: grid; grid-template-columns: 1fr 280px; gap: 20px;
+  padding: 20px 22px;
+}
+@media (max-width: 720px) {
+  .edit-body { grid-template-columns: 1fr; }
+}
+
+.edit-stage-wrap { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.edit-stage {
+  position: relative; align-self: center; max-width: 100%;
+  background: #000; border-radius: var(--radius-ui); overflow: hidden;
+  border: 1px solid var(--frost-border);
+  touch-action: none; user-select: none; line-height: 0;
+}
+.edit-canvas { display: block; max-width: 100%; height: auto; }
+.edit-dims { font-size: 12px; color: var(--color-slate); text-align: center; min-height: 16px; }
+
+/* Crop rectangle + 8 handles (positioned in CSS px over the canvas) */
+.crop-rect {
+  position: absolute; box-sizing: border-box;
+  border: 1.5px solid var(--color-bone); cursor: move;
+  box-shadow: 0 0 0 9999px rgba(10,10,10,.6);
+}
+.crop-rect[hidden] { display: none; }
+.crop-rect::before, .crop-rect::after {
+  content: ''; position: absolute; background: rgba(255,255,255,.28); pointer-events: none;
+}
+.crop-rect::before { left: 33.33%; top: 0; width: 1px; height: 100%; }
+.crop-rect::after  { left: 66.66%; top: 0; width: 1px; height: 100%; }
+.crop-handle {
+  position: absolute; width: 12px; height: 12px; box-sizing: border-box;
+  background: var(--color-bone); border: 1.5px solid var(--color-graphite); border-radius: var(--radius-icons);
+  transform: translate(-50%, -50%);
+}
+.crop-handle[data-h="nw"] { left: 0;   top: 0;   cursor: nwse-resize; }
+.crop-handle[data-h="n"]  { left: 50%; top: 0;   cursor: ns-resize; }
+.crop-handle[data-h="ne"] { left: 100%;top: 0;   cursor: nesw-resize; }
+.crop-handle[data-h="e"]  { left: 100%;top: 50%; cursor: ew-resize; }
+.crop-handle[data-h="se"] { left: 100%;top: 100%;cursor: nwse-resize; }
+.crop-handle[data-h="s"]  { left: 50%; top: 100%;cursor: ns-resize; }
+.crop-handle[data-h="sw"] { left: 0;   top: 100%;cursor: nesw-resize; }
+.crop-handle[data-h="w"]  { left: 0;   top: 50%; cursor: ew-resize; }
+/* Preview-only crop rect (apply-to-all): frame the region, no interaction */
+.crop-rect--preview { cursor: default; border-style: dashed; }
+.crop-rect--preview .crop-handle { display: none; }
+
+.focus-marker {
+  position: absolute; width: 22px; height: 22px; box-sizing: border-box;
+  border: 2px solid var(--color-graphite); border-radius: 50%; transform: translate(-50%, -50%);
+  box-shadow: 0 0 0 2px var(--color-bone), 0 1px 4px rgba(0,0,0,.6); pointer-events: none;
+}
+.focus-marker::after {
+  content: ''; position: absolute; left: 50%; top: 50%;
+  width: 4px; height: 4px; background: var(--color-bone); border-radius: 50%;
+  transform: translate(-50%, -50%);
+}
+.focus-marker[hidden] { display: none; }
+
+/* Controls column */
+.edit-controls { display: flex; flex-direction: column; gap: 16px; }
+.edit-group { display: flex; flex-direction: column; gap: 8px; }
+.edit-group[hidden] { display: none; }
+.edit-label {
+  font-size: 13px; font-weight: 500; color: var(--color-slate);
+  text-transform: uppercase; letter-spacing: 0.6px;
+}
+.edit-chips, .edit-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+.edit-chip {
+  border: 1px solid var(--frost-border); background: transparent; color: var(--color-bone);
+  padding: 6px 12px; border-radius: var(--radius-pill); font: inherit; font-size: 13px; font-weight: 500;
+  cursor: pointer; transition: border-color .1s, background .1s;
+}
+.edit-chip:hover  { border-color: var(--color-bone); }
+.edit-chip.active { border-color: var(--color-bone); background: var(--color-bone); color: var(--color-graphite); }
+/* Contextual, example-led helper line - reserves height so switching options
+   (or clearing the text) doesn't jump the layout. */
+.edit-hint { min-height: 15px; line-height: 1.35; color: var(--color-slate); }
+.edit-custom { display: flex; align-items: center; gap: 6px; }
+.edit-custom[hidden] { display: none; }
+.edit-custom input { width: 62px; }
+.edit-custom span { color: var(--color-slate); }
+#zoomRange { width: 100%; accent-color: var(--color-bone); cursor: pointer; }
+.edit-scope .choice { flex: 1 1 120px; padding: 10px; }
+.edit-actions { border-top: 1px solid var(--frost-border); padding-top: 16px; justify-content: flex-end; }

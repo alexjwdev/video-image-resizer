@@ -68,9 +68,29 @@ async function smoke() {
     { file: 'banner.jpg', format: 'jpeg', opts: { isBanner: true } },
     { file: 'graphic.png', format: 'png', opts: {} },
     { file: 'graphic.png', format: 'webp', opts: {} },
+    // maxWidth ceiling: generous target but capped resolution - width must not exceed the cap
+    { file: 'photo.jpg', format: 'jpeg', opts: { maxWidth: 800 }, check: (r) => r.result.width <= 800 },
+    // maxWidth wins over isBanner's "protect full width" - capped, not full-width
+    { file: 'banner.jpg', format: 'jpeg', opts: { isBanner: true, maxWidth: 1000 }, check: (r) => r.result.width <= 1000 },
     // conflict: protected banner width + a tiny target it cannot meet at full width
     { file: 'banner.jpg', format: 'jpeg', opts: { isBanner: true, targetBytes: 2 * 1024 }, expectConflict: true },
+    // --- pre-compression edit (crop / aspect / rotate) ---
+    // explicit crop rect: 4:3 region; aspect must survive the downscale ladder
+    { file: 'photo.jpg', format: 'jpeg', opts: { edit: { crop: { x: 0, y: 0, w: 400, h: 300 } } },
+      check: (r) => arOk(r, 4 / 3) },
+    // aspect cover-crop with content-aware attention (no focus point)
+    { file: 'photo.jpg', format: 'jpeg', opts: { edit: { aspect: { ar: 16 / 9 }, smartCrop: 'attention' } },
+      check: (r) => arOk(r, 16 / 9) },
+    // 90-degree rotate: a landscape sample must come out portrait
+    { file: 'photo.jpg', format: 'webp', opts: { edit: { rotate: 90 } },
+      check: (r) => r.original.height > r.original.width },
+    // out-of-bounds crop: must clamp (not throw) and still meet target
+    { file: 'photo.jpg', format: 'jpeg', opts: { edit: { crop: { x: 999999, y: 0, w: 400, h: 300 } } },
+      check: (r) => !!r.result && r.result.size > 0 },
   ];
+
+  // Aspect-ratio check with tolerance (integer rounding through the ladder).
+  const arOk = (r, ar) => Math.abs((r.result.width / r.result.height) - ar) < 0.03;
 
   console.log(`\nimage-resizer smoke — target ${TARGET / 1024} KB (unless noted)\n`);
   let failures = 0;
@@ -91,9 +111,10 @@ async function smoke() {
       console.log(`        hitTarget      ${kb(r.hitTarget.size)}  ${r.hitTarget.width}x${r.hitTarget.height}  (<= target: ${okHit})`);
     } else {
       const under = r.result.size <= target;
-      const pass = under && !c.expectConflict;
+      const checkOk = c.check ? c.check(r) : true;
+      const pass = under && checkOk && !c.expectConflict;
       if (!pass) failures++;
-      console.log(`${pass ? 'PASS' : 'FAIL'}  ${tag}`);
+      console.log(`${pass ? 'PASS' : 'FAIL'}  ${tag}${c.check ? (checkOk ? '  [check ok]' : '  [CHECK FAILED]') : ''}`);
       console.log(`        ${r.original.width}x${r.original.height} ${kb(r.original.size)}  ->  ${r.result.width}x${r.result.height} ${kb(r.result.size)} q${r.result.quality} ${r.format}`);
     }
   }
@@ -133,56 +154,129 @@ function waitForServer(url, ms = 15000) {
   })();
 }
 
+// Wait for every result card thumbnail to have decoded (naturalWidth > 0), then
+// return each card's ACTUAL output dimensions.
+async function resultCardDims(page, expected) {
+  // Deterministic render signal: renderCard sets the sizes text synchronously,
+  // so wait on that (not on async <img> decode) to avoid a decode-timing flake.
+  await page.waitForFunction((n) => {
+    const cards = document.querySelectorAll('#results .card');
+    return cards.length >= n && [...cards].every((c) => {
+      const t = c.querySelector('.card-sizes-text');
+      return t && t.textContent.includes('→');
+    });
+  }, expected, { timeout: 30000 });
+  // Then force-decode each thumbnail before reading its true dimensions.
+  return page.$$eval('#results .card .card-thumb', async (imgs) => {
+    await Promise.all(imgs.map((i) => (i.decode ? i.decode().catch(() => {}) : null)));
+    return imgs.map((i) => ({ w: i.naturalWidth, h: i.naturalHeight }));
+  });
+}
+
 async function e2e() {
   const PORT = 3299; // dedicated test port
   const base = `http://127.0.0.1:${PORT}`;
   const shot = path.join(__dirname, 'result.png');
+  const editShot = path.join(__dirname, 'editor.png');
 
   const server = spawn(process.execPath, ['server.js'], {
     cwd: ROOT, env: { ...process.env, PORT: String(PORT), HOST: '127.0.0.1' }, stdio: 'inherit',
   });
 
-  let exitCode = 1;
+  const results = [];   // { name, pass, detail }
+  const rec = (name, pass, detail) => { results.push({ name, pass, detail }); console.log(`[e2e] ${pass ? 'PASS' : 'FAIL'}  ${name}  ${detail || ''}`); };
+  const arOk = (w, h, ar) => Math.abs((w / h) - ar) < 0.03;
+
+  let page = null;
   try {
     await waitForServer(`${base}/api/config`);
     const { chromium } = require(path.join(ROOT, 'node_modules', 'playwright'));
     const browser = await chromium.launch();
-    const page = await browser.newPage({ viewport: { width: 1100, height: 1400 } });
+    page = await browser.newPage({ viewport: { width: 1100, height: 1400 } });
     await page.goto(base, { waitUntil: 'networkidle' });
 
-    // upload a real sample through the actual file input
+    // ── Scenario 0: baseline compress (banner, isBanner) <= 500 KB ──────────
+    // isBanner now lives inside the collapsed "Advanced" <details> (folded
+    // out of the main options in favor of the settings-profile picker) -
+    // open it first, same as a user would, since a hidden checkbox can't be
+    // checked.
     await page.setInputFiles('#fileInput', path.join(SAMPLES, 'banner.jpg'));
+    await page.evaluate(() => { document.querySelector('#advancedOpts').open = true; });
     await page.check('#isBanner');
     await page.click('#compressBtn');
-
     await page.waitForFunction(() => {
       const s = document.querySelector('#results .card .card-sizes-text');
       return s && s.textContent.includes('→');
     }, { timeout: 30000 });
-
-    const info = await page.evaluate(() => {
+    const base0 = await page.evaluate(() => {
       const card = document.querySelector('#results .card');
-      const txt = card.querySelector('.card-sizes-text').textContent;
-      // e.g. "1235 KB → 494 KB" - the size after the arrow is the result.
-      const m = txt.match(/→\s*([\d.]+)\s*KB/);
-      return { stats: txt, resultKB: m ? parseFloat(m[1]) : null, badge: card.querySelector('.badge')?.textContent };
+      const m = card.querySelector('.card-sizes-text').textContent.match(/→\s*([\d.]+)\s*KB/);
+      return { resultKB: m ? parseFloat(m[1]) : null, badge: card.querySelector('.badge')?.textContent };
     });
-
     await page.screenshot({ path: shot, fullPage: true });
+    rec('baseline compress <= 500 KB', base0.resultKB !== null && base0.resultKB <= 500, `${base0.resultKB} KB, badge "${base0.badge}"`);
+
+    // ── Scenario A: edit ONE image, 1:1, click focus, expect square result ──
+    await page.uncheck('#isBanner');
+    await page.click('#clearBtn');
+    await page.setInputFiles('#fileInput', path.join(SAMPLES, 'photo.jpg')); // 2400x1600
+    await page.click('.qi-edit');                                            // open editor
+    await page.waitForSelector('#editOverlay:not([hidden])', { timeout: 10000 });
+    await page.waitForFunction(() => document.querySelector('#editCanvas').width > 0, { timeout: 10000 });
+    await page.click('[data-aspect="1:1"]');
+    await page.click('#editStage');                                         // click to set focus / recenter
+    await page.screenshot({ path: editShot, fullPage: true });              // visual QA of the editor
+    await page.click('#editSave');
+    await page.waitForSelector('#editOverlay', { state: 'hidden', timeout: 5000 });
+    const chipShown = await page.evaluate(() => {
+      const c = document.querySelector('.qi-chip');
+      return !!c && !c.hidden;
+    });
+    rec('edited chip appears after save', chipShown, '');
+    await page.click('#compressBtn');
+    const [aDim] = await resultCardDims(page, 1);
+    rec('single 1:1 crop -> square result', arOk(aDim.w, aDim.h, 1), `${aDim.w}x${aDim.h}`);
+
+    // ── Scenario B: Edit all, 4:3, two differently-sized images ─────────────
+    await page.click('#clearBtn');
+    await page.setInputFiles('#fileInput', [
+      path.join(SAMPLES, 'photo.jpg'),   // 2400x1600 (3:2)
+      path.join(SAMPLES, 'banner.jpg'),  // 2400x600  (4:1)
+    ]);
+    await page.click('#editAllBtn');
+    await page.waitForSelector('#editOverlay:not([hidden])', { timeout: 10000 });
+    await page.waitForFunction(() => document.querySelector('#editCanvas').width > 0, { timeout: 10000 });
+    await page.click('[data-aspect="4:3"]');
+    await page.click('#editSave');
+    await page.waitForSelector('#editOverlay', { state: 'hidden', timeout: 5000 });
+    await page.click('#compressBtn');
+    const bDims = await resultCardDims(page, 2);
+    const allFourThree = bDims.length === 2 && bDims.every((d) => arOk(d.w, d.h, 4 / 3));
+    rec('edit-all 4:3 -> both results 4:3', allFourThree, bDims.map((d) => `${d.w}x${d.h}`).join(', '));
+
     await browser.close();
 
-    console.log('\n[e2e] ' + info.stats);
-    console.log('[e2e] badge: ' + info.badge);
-    console.log('[e2e] screenshot: ' + shot);
-    const ok = info.resultKB !== null && info.resultKB <= 500;
-    console.log('[e2e] result <= 500 KB: ' + ok + '\n');
-    exitCode = ok ? 0 : 1;
+    console.log(`\n[e2e] screenshots: ${shot} , ${editShot}`);
+    const failures = results.filter((r) => !r.pass).length;
+    console.log(`\n[e2e] ${failures === 0 ? 'ALL PASS' : failures + ' FAILURE(S)'}\n`);
+    server.kill();
+    process.exit(failures === 0 ? 0 : 1);
   } catch (err) {
     console.error('[e2e] FAILED:', err.message);
-  } finally {
+    try {
+      const dump = page && await page.evaluate(() => ({
+        cards: [...document.querySelectorAll('#results .card')].map((c) => ({
+          err: c.classList.contains('card--error'),
+          sizes: (c.querySelector('.card-sizes-text') || c.querySelector('.card-sizes'))?.textContent,
+          nat: (() => { const i = c.querySelector('.card-thumb'); return i ? i.naturalWidth + 'x' + i.naturalHeight : 'none'; })(),
+        })),
+        error: document.querySelector('#error') && !document.querySelector('#error').hidden ? document.querySelector('#error').textContent : null,
+      }));
+      if (dump) console.error('[e2e] DOM dump:', JSON.stringify(dump, null, 2));
+    } catch {}
     server.kill();
+    process.exit(1);
   }
-  process.exit(exitCode);
 }
 
 // --------------------------------------------------------------------- entry

@@ -9,7 +9,7 @@ const multer = require('multer');
 const compression = require('compression');
 const rateLimit = require('express-rate-limit');
 const session = require('express-session');
-const { compress } = require('./lib/compress');
+const { compress, DEFAULT_PROFILE } = require('./lib/compress');
 const { compressVideo } = require('./lib/video');
 const { isHeic, detectVideoType } = require('./lib/decode');
 const downloadRegistry = require('./lib/download-registry');
@@ -34,6 +34,11 @@ const MAX_FILE_MB      = parseInt(process.env.MAX_FILE_MB, 10) || 25;
 const MAX_FILES        = parseInt(process.env.MAX_FILES, 10) || 20;   // SEC-03: default 20, not 100
 const MAX_CONCURRENT   = parseInt(process.env.MAX_CONCURRENT, 10) || 5;
 const MAX_TARGET_KB    = MAX_FILE_MB * 1024;                          // SEC-04: targetKB ceiling
+// Encoder profile: 'max' (default), 'balanced', or 'fast'. See ENCODE_PROFILES
+// in lib/compress.js. Unset keeps the original max-fidelity behaviour, so a
+// self-hosted or portable build is never silently downgraded; only a hosted
+// deployment paying for CPU has a reason to set this.
+const ENCODE_PROFILE   = process.env.ENCODE_PROFILE || DEFAULT_PROFILE;
 
 // Video (ffmpeg-based) limits — separate from the image knobs above since
 // videos are naturally much larger and far slower to process.
@@ -48,8 +53,13 @@ const DOWNLOAD_TTL_MS      = 15 * 60 * 1000;
 const BRAND = {
   name:      process.env.BRAND_NAME           || 'Image Resizer',
   tagline:   process.env.BRAND_TAGLINE        || 'Compress images and videos to your size target - banner-safe, resolution-aware',
-  accent:    process.env.BRAND_ACCENT_COLOR   || '#4f8cff',
-  highlight: process.env.BRAND_HIGHLIGHT_COLOR || process.env.BRAND_ACCENT_COLOR || '#4f8cff',
+  // Monochrome bone default (Dimension-style achromatic dark theme) - a
+  // deployment can still re-skin to a chromatic accent via BRAND_ACCENT_COLOR/
+  // HIGHLIGHT_COLOR. Kept light (not violet) so runtime overrides driving
+  // --accent/--highlight stay a neutral highlight, matching the CSS's own
+  // "violet is decoration-only, never a functional accent" rule.
+  accent:    process.env.BRAND_ACCENT_COLOR   || '#ededed',
+  highlight: process.env.BRAND_HIGHLIGHT_COLOR || process.env.BRAND_ACCENT_COLOR || '#ededed',
 };
 
 const VALID_FORMATS = new Set(['jpeg', 'webp', 'png']);
@@ -214,9 +224,18 @@ function buildResult(f, r, opts) {
   return { ...base, result: toPayload(r.result) };
 }
 
+// Output is always MP4 regardless of source container, so the downloaded
+// filename must carry that extension too - otherwise Content-Disposition
+// hands back e.g. "clip.mkv" for a file that is actually a valid MP4,
+// which then reads as broken/unrecognized to the OS and media players.
+function mp4Name(originalName) {
+  const stem = originalName.replace(/\.[^.]+$/, '');
+  return (stem || 'video') + '.mp4';
+}
+
 function buildVideoResult(f, r, opts) {
   const id = downloadRegistry.putBuffer(r.result.buffer, {
-    name: f.originalname,
+    name: mp4Name(f.originalname),
     mime: VIDEO_MIME[r.format],
     ext: '.mp4',
   });
@@ -246,8 +265,51 @@ function buildVideoResult(f, r, opts) {
   };
 }
 
+const clamp01 = (v) => Math.max(0, Math.min(1, v));
+
+// SEC: validate the optional pre-compression edit from the request body into a
+// clean shape (or null). Shape/type only here - crop-rectangle BOUNDS are
+// clamped in lib/compress.js where the real (post-rotate) dimensions are known,
+// so client-supplied coordinates are never trusted. Absent/no-op => null =>
+// the pipeline behaves exactly as before.
+function parseEdit(body) {
+  const rot = parseInt(body.rotate, 10);
+  const rotate = [90, 180, 270].includes(rot) ? rot : 0;
+  const flipH = body.flipH === '1' || body.flipH === 'true';
+  const flipV = body.flipV === '1' || body.flipV === 'true';
+
+  let crop = null;
+  const cx = parseInt(body.cropX, 10), cy = parseInt(body.cropY, 10);
+  const cw = parseInt(body.cropW, 10), ch = parseInt(body.cropH, 10);
+  if ([cx, cy, cw, ch].every(Number.isFinite) && cw > 0 && ch > 0 && cx >= 0 && cy >= 0) {
+    crop = { x: cx, y: cy, w: cw, h: ch };
+  }
+
+  // Aspect only applies when there's no explicit rectangle. 'free'/'orig' (and
+  // anything unrecognised) leave aspect null. '1:1' etc. match the regex.
+  let aspect = null;
+  if (!crop && typeof body.aspect === 'string') {
+    const m = /^(\d{1,4}):(\d{1,4})$/.exec(body.aspect);
+    if (m) {
+      const aw = parseInt(m[1], 10), ah = parseInt(m[2], 10);
+      if (aw > 0 && ah > 0) aspect = { ar: aw / ah };
+    }
+  }
+
+  let focus = null;
+  const fx = parseFloat(body.focusX), fy = parseFloat(body.focusY);
+  if (Number.isFinite(fx) && Number.isFinite(fy)) focus = { x: clamp01(fx), y: clamp01(fy) };
+
+  const smartCrop = body.smartCrop === 'entropy' ? 'entropy' : 'attention';
+
+  // No-op edit (nothing that changes pixels) => null, so passthrough stays live.
+  if (!crop && !rotate && !flipH && !flipV && !aspect) return null;
+  // Focus is only meaningful for an aspect cover-crop; drop it otherwise.
+  return { crop, rotate, flipH, flipV, aspect, focus: aspect ? focus : null, smartCrop };
+}
+
 // PERF-01: bounded concurrent processing within a single request.
-// Images and videos run in independent worker pools concurrently — video
+// Images and videos run in independent worker pools concurrently - video
 // encodes are slow and CPU-heavy (libx264 already threads across cores),
 // so they get a much smaller pool than the cheap-per-call image pipeline.
 async function processFiles(files, opts, videoOpts) {
@@ -357,9 +419,17 @@ app.post(
         parseInt(req.body.targetKB, 10) || DEFAULT_TARGET_KB,
         MAX_TARGET_KB
       ) * 1024,
+      // Encoder tuning. Unset = 'max' (lib/compress.js default), which is the
+      // behaviour every self-hosted and portable build keeps. A hosted
+      // deployment serving strangers concurrently sets ENCODE_PROFILE=fast:
+      // roughly 10x less CPU per encode, at the cost of chroma resolution.
+      profile:   ENCODE_PROFILE,
       isBanner:  req.body.isBanner === 'true' || req.body.isBanner === '1',
       minWidth:  parseInt(req.body.minWidth,  10) || 0,
       minHeight: parseInt(req.body.minHeight, 10) || 0,
+      maxWidth:  parseInt(req.body.maxWidth,  10) || 0,
+      // Optional pre-compression edit (crop/rotate/flip/aspect-focus); null when absent.
+      edit:      parseEdit(req.body),
     };
 
     const videoOpts = {

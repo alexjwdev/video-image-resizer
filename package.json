@@ -8,7 +8,8 @@
   "scripts": {
     "start": "node server.js",
     "test": "node test/driver.mjs",
-    "smoke": "node test/driver.mjs"
+    "smoke": "node test/driver.mjs",
+    "build:portable": "node scripts/build-portable.mjs"
   },
   "engines": {
     "node": ">=20.9.0"
